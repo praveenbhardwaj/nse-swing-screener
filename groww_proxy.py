@@ -928,7 +928,8 @@ def fetch_market_data():
 @app.route("/health")
 def health():
     return jsonify({"status": "ok", "yf_available": YF_OK, "time": time.time(),
-                    "session_creds_active": bool(_session_api_key)})
+                    "session_creds_active": bool(_session_api_key),
+                    "supabase_ok": SB_OK, "build": "v3-requests"})
 
 @app.route("/ltp")
 def get_ltp():
