@@ -194,7 +194,7 @@ def detect_market_regime():
 def get_regime_config(regime):
     configs = {
         REGIME_BULL: {
-            "rsi_min": 45, "rsi_max": 70, "vol_min": 1.4,
+            "rsi_min": 45, "rsi_max": 68, "vol_min": 1.2,
             "rs_required": False, "higher_lows_req": False,
             "no_gap_req": False, "bb_filter_req": False, "atr_max_pct": 7.0, "min_score": 50,
             "w_rsi": 20, "w_volume": 20, "w_ema": 15, "w_macd": 15,
@@ -204,7 +204,7 @@ def get_regime_config(regime):
             "min_rr": 1.5, "allow_strong_buy": True,
         },
         REGIME_NEUTRAL: {
-            "rsi_min": 45, "rsi_max": 68, "vol_min": 1.5,
+            "rsi_min": 45, "rsi_max": 68, "vol_min": 1.2,
             "rs_required": False, "higher_lows_req": False,
             "no_gap_req": False, "bb_filter_req": False, "atr_max_pct": 6.0, "min_score": 52,
             "w_rsi": 20, "w_volume": 20, "w_ema": 15, "w_macd": 15,
@@ -214,7 +214,7 @@ def get_regime_config(regime):
             "min_rr": 1.5, "allow_strong_buy": True,
         },
         REGIME_BEAR: {
-            "rsi_min": 46, "rsi_max": 62, "vol_min": 1.8,
+            "rsi_min": 46, "rsi_max": 62, "vol_min": 1.2,
             "rs_required": True, "higher_lows_req": False,
             "no_gap_req": True, "bb_filter_req": False, "atr_max_pct": 5.0, "min_score": 60,
             "w_rsi": 15, "w_volume": 25, "w_ema": 10, "w_macd": 12,
@@ -266,6 +266,32 @@ def calc_macd_signal(closes, fast=12, slow=26, sig_period=9):
     if float(macd.iloc[-1]) < float(sig.iloc[-1]) and float(hist.iloc[-1]) < 0:
         return "bearish"
     return "neutral"
+
+def calc_macd_full(closes, fast=12, slow=26, sig_period=9):
+    """Returns (signal, histogram_val, crossover_in_last_5d) per new requirements."""
+    closes = pd.Series(closes, dtype=float)
+    if len(closes) < slow + sig_period:
+        return "neutral", 0.0, False
+    ema_f = closes.ewm(span=fast, adjust=False).mean()
+    ema_s = closes.ewm(span=slow, adjust=False).mean()
+    macd  = ema_f - ema_s
+    sig   = macd.ewm(span=sig_period, adjust=False).mean()
+    hist  = macd - sig
+    hist_now = float(hist.iloc[-1])
+    macd_now = float(macd.iloc[-1]); sig_now = float(sig.iloc[-1])
+    # Crossover in last 5 days: MACD crossed above signal
+    crossover_5d = False
+    n = min(5, len(macd) - 1)
+    for i in range(-n, 0):
+        if float(macd.iloc[i]) > float(sig.iloc[i]) and float(macd.iloc[i-1]) <= float(sig.iloc[i-1]):
+            crossover_5d = True; break
+    if macd_now > sig_now and hist_now > 0:
+        signal = "bullish"
+    elif macd_now < sig_now and hist_now < 0:
+        signal = "bearish"
+    else:
+        signal = "neutral"
+    return signal, round(hist_now, 4), crossover_5d
 
 def calc_atr(highs, lows, closes, period=14):
     h = np.array(highs, dtype=float)
@@ -329,13 +355,28 @@ def check_no_gap_down(opens, closes, threshold=0.015, n=5):
             return False
     return True
 
+def calc_relative_strength(stock_closes, nifty_closes):
+    """Step 2: Relative strength — 5-day AND 10-day vs Nifty (OR condition)."""
+    res = {"s_ret_5d": None, "n_ret_5d": None, "rs_5d_ok": None,
+           "s_ret_10d": None, "n_ret_10d": None, "rs_10d_ok": None, "rs_ok": False}
+    if len(stock_closes) >= 6 and len(nifty_closes) >= 6:
+        s5 = (float(stock_closes[-1]) - float(stock_closes[-6])) / float(stock_closes[-6]) * 100
+        n5 = (float(nifty_closes[-1]) - float(nifty_closes[-6])) / float(nifty_closes[-6]) * 100
+        res.update({"s_ret_5d": round(s5, 2), "n_ret_5d": round(n5, 2),
+                    "rs_5d_ok": s5 > n5 + 1.5})  # outperform by +1.5%
+    if len(stock_closes) >= 11 and len(nifty_closes) >= 11:
+        s10 = (float(stock_closes[-1]) - float(stock_closes[-11])) / float(stock_closes[-11]) * 100
+        n10 = (float(nifty_closes[-1]) - float(nifty_closes[-11])) / float(nifty_closes[-11]) * 100
+        res.update({"s_ret_10d": round(s10, 2), "n_ret_10d": round(n10, 2),
+                    "rs_10d_ok": s10 > n10 + 2.0})  # outperform by +2%
+    r5 = res.get("rs_5d_ok"); r10 = res.get("rs_10d_ok")
+    res["rs_ok"] = bool((r5 is True) or (r10 is True))
+    return res
+
 def calc_relative_strength_10d(stock_closes, nifty_closes):
-    if len(stock_closes) < 11 or len(nifty_closes) < 11:
-        return None, None, None
-    sc    = stock_closes[-11:]; nc = nifty_closes[-11:]
-    s_ret = (float(sc[-1]) - float(sc[0])) / float(sc[0]) * 100
-    n_ret = (float(nc[-1]) - float(nc[0])) / float(nc[0]) * 100
-    return round(s_ret, 2), round(n_ret, 2), s_ret > n_ret
+    """Backward-compat alias — use calc_relative_strength instead."""
+    rs = calc_relative_strength(stock_closes, nifty_closes)
+    return rs["s_ret_10d"], rs["n_ret_10d"], rs["rs_10d_ok"]
 
 def calc_rs_vs_sector(stock_closes, sector_closes):
     if sector_closes is None or len(sector_closes) < 11 or len(stock_closes) < 11:
@@ -350,6 +391,122 @@ def calc_52wk_proximity(closes_1y, highs_1y):
     hi52      = float(np.nanmax(highs_1y))
     pct_below = (hi52 - price) / hi52 * 100 if hi52 > 0 else 0
     return round(pct_below, 1)
+
+def calc_52wk_position_pctile(closes_1y, highs_1y, lows_1y):
+    """Position in 52-week range as percentile (0–100). Step 8/9."""
+    price = float(closes_1y[-1])
+    hi52  = float(np.nanmax(highs_1y))
+    lo52  = float(np.nanmin(lows_1y))
+    if hi52 <= lo52: return 50
+    return round((price - lo52) / (hi52 - lo52) * 100, 1)
+
+def check_ma_structure(closes, ema20_s, ema50_s, ema200_s, rsi_s):
+    """Step 4: MA structure — at least ONE of 4 OR-conditions must be true."""
+    price = float(closes[-1])
+    e20   = float(ema20_s.iloc[-1]); e50 = float(ema50_s.iloc[-1]); e200 = float(ema200_s.iloc[-1])
+    # a) Price > 20EMA AND 20EMA > 50EMA
+    cond_a = price > e20 and e20 > e50
+    # b) Price crossed above 20EMA within last 3 trading days
+    cond_b = False
+    n = min(len(closes), len(ema20_s))
+    for i in range(-min(3, n-1), 0):
+        if float(closes[i]) > float(ema20_s.iloc[i]) and float(closes[i-1]) <= float(ema20_s.iloc[i-1]):
+            cond_b = True; break
+    # c) Price > 200EMA
+    cond_c = price > e200
+    # d) Price between 20EMA and 50EMA with RSI rising
+    between = (min(e20, e50) <= price <= max(e20, e50))
+    rsi_rising = len(rsi_s) >= 4 and float(rsi_s.iloc[-1]) > float(rsi_s.iloc[-4])
+    cond_d = between and rsi_rising
+    met = sum([cond_a, cond_b, cond_c, cond_d])
+    return met >= 1, met, {"a": cond_a, "b": cond_b, "c": cond_c, "d": cond_d}
+
+# Step 7: Sector bonus scoring
+_SECTOR_BONUS_RULES = [
+    (["energy", "coal", "oil & gas", "oil and gas", "crude", "petroleum", "power"], 3),
+    (["pharma", "pharmaceutical", "healthcare", "health care", "medicine", "drug"], 3),
+    (["metal", "steel", "mining", "aluminium", "aluminum", "copper", "zinc", "iron"], 2),
+    (["psu", "defence", "defense", "railway", "railroad", "public sector", "shipbuilding"], 2),
+    (["fmcg", "consumer staples", "consumer goods", "food", "beverage", "household"], 1),
+    (["information technology", "software", "computer", "tech"], -1),
+    (["realty", "real estate", "housing", "property"], -2),
+]
+
+def get_sector_bonus(sector):
+    s = (sector or "").lower()
+    for keywords, pts in _SECTOR_BONUS_RULES:
+        if any(kw in s for kw in keywords):
+            return pts
+    return 0
+
+# IT sector symbols to hard-exclude (Step 1)
+_IT_SECTOR_NAMES = {"information technology", "it", "software", "technology"}
+
+def fetch_fundamentals_quick(symbol):
+    """Step 8: Fetch PE, D/E, ROE, market cap. Slow — use only for shortlisted stocks."""
+    try:
+        info = yf.Ticker(f"{symbol}.NS").info
+        pe   = info.get("trailingPE"); roe = info.get("returnOnEquity"); de = info.get("debtToEquity")
+        mcap = info.get("marketCap", 0)
+        return {
+            "pe": round(float(pe), 1) if pe else None,
+            "roe": round(float(roe) * 100, 1) if roe else None,  # store as %
+            "de":  round(float(de), 2) if de else None,
+            "market_cap_cr": round(mcap / 1e7, 0) if mcap else None,  # in crore
+            "pe_flag": bool(pe and float(pe) > 60),
+            "de_flag": bool(de and float(de) > 2.0),
+            "roe_ok":  bool(roe and float(roe) > 0.12),
+            "mcap_ok": bool(mcap and mcap > 5_000 * 1e7),
+        }
+    except Exception:
+        return {}
+
+def generate_rationale(r):
+    """Step 10: Generate 'Why this stock' and 'Key Risk' strings."""
+    reasons = []
+    # Relative strength
+    s5 = r.get("s_ret_5d") or 0; n5 = r.get("n_ret_5d") or 0; diff5 = round(s5 - n5, 1)
+    s10 = r.get("s_ret_10d") or 0; n10 = r.get("n_ret_10d") or 0; diff10 = round(s10 - n10, 1)
+    if diff5 >= 1.5:
+        reasons.append(f"Outperforming Nifty by {diff5:+.1f}% (5d) — institutional accumulation")
+    elif diff10 >= 2:
+        reasons.append(f"Outperforming Nifty by {diff10:+.1f}% (10d) — sustained RS strength")
+    # MACD
+    if r.get("macd") == "bullish":
+        reasons.append("MACD bullish — positive momentum confirmed")
+    elif r.get("macd_crossover_5d"):
+        reasons.append("Fresh MACD crossover (last 5d) — early momentum entry")
+    # MA
+    ma_d = r.get("ma_detail", {})
+    if ma_d.get("a"):
+        reasons.append("Price > EMA20 > EMA50 — short-term bullish alignment")
+    elif ma_d.get("c"):
+        reasons.append("Price above 200 EMA — long-term uptrend intact")
+    elif ma_d.get("b"):
+        reasons.append("Price just crossed above EMA20 — breakout signal")
+    # Sector
+    sb = r.get("sector_bonus", 0)
+    if sb >= 2:
+        reasons.append(f"Sector '{r.get('sector','')}' has FII inflow/geopolitical tailwind")
+    # RSI
+    rsi = r.get("rsi", 0)
+    if 55 <= rsi <= 65:
+        reasons.append(f"RSI {rsi:.0f} — momentum building in sweet spot")
+    # Key risk
+    fund = r.get("fundamentals") or {}
+    pe = fund.get("pe"); de = fund.get("de"); atr_pct = r.get("atr_pct", 0)
+    pct_below = r.get("pct_below_52wk", 50)
+    if pe and pe > 60:
+        risk = f"High valuation (PE {pe:.0f}x) — expensive, use caution"
+    elif de and de > 2.0:
+        risk = f"High leverage (D/E {de:.1f}) — interest burden risk"
+    elif atr_pct and atr_pct > 4:
+        risk = f"High volatility (ATR {atr_pct:.1f}%) — wider SL may be needed"
+    elif pct_below < 5:
+        risk = "Near 52-week high — limited upside, watch for reversal"
+    else:
+        risk = "Market reversal could invalidate setup — honour stop loss strictly"
+    return " | ".join(reasons[:3]) if reasons else "Passes all technical filters", risk
 
 def calc_volume_quality(volumes, n_recent=3, n_avg=20):
     if len(volumes) < n_avg + n_recent:
@@ -619,10 +776,16 @@ def analyze_stock(sym_info, df, params, context):
     rcfg   = context.get("regime_config", get_regime_config(REGIME_NEUTRAL))
 
     # ── Core indicators ───────────────────────────────────────────
-    rsi_val  = float(calc_rsi(closes).iloc[-1])
-    ema20    = float(calc_ema(closes, 20).iloc[-1])
-    ema50    = float(calc_ema(closes, 50).iloc[-1])
-    macd_sig = calc_macd_signal(closes)
+    rsi_s    = calc_rsi(closes)
+    rsi_val  = float(rsi_s.iloc[-1])
+    ema20_s  = calc_ema(closes, 20)
+    ema50_s  = calc_ema(closes, 50)
+    ema200_s = calc_ema(closes, 200) if len(closes) >= 200 else calc_ema(closes, min(len(closes), 50))
+    ema20    = float(ema20_s.iloc[-1])
+    ema50    = float(ema50_s.iloc[-1])
+    ema200   = float(ema200_s.iloc[-1])
+
+    macd_sig, macd_hist, macd_cross_5d = calc_macd_full(closes)
 
     vol_ratio, vol_consistent = calc_volume_quality(volumes)
     avg_vol        = float(np.mean(volumes[-21:-1])) if len(volumes) > 21 else float(np.mean(volumes[:-1]))
@@ -630,6 +793,7 @@ def analyze_stock(sym_info, df, params, context):
 
     diff_pct = (price - ema20) / ema20 * 100
     ema_pos  = "above" if diff_pct > 0.5 else ("at" if diff_pct > -0.5 else "below")
+    above_ema50 = price > ema50
 
     recent_high  = float(np.max(highs[-21:-1])) if len(highs) > 21 else float(np.max(highs[:-1]))
     breakout_20d = price > recent_high
@@ -640,21 +804,33 @@ def analyze_stock(sym_info, df, params, context):
     higher_lows_ok               = check_higher_lows(lows)
     no_gap_ok                    = check_no_gap_down(opens, closes)
     pct_below_52                 = calc_52wk_proximity(closes, highs)
+    pctile_52wk                  = calc_52wk_position_pctile(closes, highs, lows)
     momentum                     = calc_price_momentum(closes)
     consol_break, consol_pct     = detect_consolidation_breakout(closes, highs, lows)
 
-    s_ret, n_ret, rs_nifty_ok = calc_relative_strength_10d(
-        closes, context.get("nifty_closes", np.array([])))
+    # Step 4: MA structure (4 OR-conditions)
+    ma_ok, ma_conds_met, ma_detail = check_ma_structure(closes, ema20_s, ema50_s, ema200_s, rsi_s)
+
+    # Step 2: Relative strength (5d AND 10d, OR condition)
+    rs_data = calc_relative_strength(closes, context.get("nifty_closes", np.array([])))
+    s_ret_5d  = rs_data.get("s_ret_5d"); n_ret_5d  = rs_data.get("n_ret_5d")
+    s_ret_10d = rs_data.get("s_ret_10d"); n_ret_10d = rs_data.get("n_ret_10d")
+    rs_5d_ok  = rs_data.get("rs_5d_ok");  rs_10d_ok = rs_data.get("rs_10d_ok")
+    rs_ok     = rs_data.get("rs_ok", False)
+
+    # legacy aliases
+    s_ret = s_ret_10d; n_ret = n_ret_10d; rs_nifty_ok = rs_10d_ok
 
     sector_closes = context.get("sector_closes", {}).get(sector.upper())
     rs_s, rs_sec, rs_sector_ok = calc_rs_vs_sector(closes, sector_closes)
 
     if regime in (REGIME_BEAR, REGIME_CRISIS):
-        rs_ok = (rs_nifty_ok is True) and (rs_sector_ok is not False)
-    else:
-        rs_ok = rs_nifty_ok
+        rs_ok = rs_ok and (rs_sector_ok is not False)
 
     del_pct = context.get("delivery_cache", {}).get(sym)
+
+    # Step 7: Sector bonus
+    sector_bonus = get_sector_bonus(sector)
 
     def rej(reason):
         return {
@@ -665,28 +841,51 @@ def analyze_stock(sym_info, df, params, context):
             "ema_pos": ema_pos, "macd": macd_sig, "regime": regime,
         }
 
-    # ── FILTER GATES ──────────────────────────────────────────────
+    # ── STEP 1: UNIVERSE FILTER GATES ─────────────────────────────
+    # Hard-exclude IT sector (Step 1)
+    if sector.lower() in _IT_SECTOR_NAMES:
+        return rej("IT sector excluded (separate trade running)")
+
+    # Exclude within 2% of 52-week high (overstretched)
+    if pct_below_52 < 2.0:
+        return rej(f"Within 2% of 52-week high ({pct_below_52:.1f}% below) — overstretched")
+
+    # Exclude falling knives: >35% below 52wk high with no recovery signal
+    if pct_below_52 > 35 and not (macd_sig == "bullish" or ema_pos in ("above", "at") or ma_ok):
+        return rej(f"{pct_below_52:.1f}% below 52wk high — no recovery signal (falling knife)")
+
+    # ── STEP 3: RSI FILTER ────────────────────────────────────────
     rsi_min = float(params.get("rsi_min", rcfg["rsi_min"]))
     rsi_max = float(params.get("rsi_max", rcfg["rsi_max"]))
     if not (rsi_min <= rsi_val <= rsi_max):
         return rej(f"RSI {rsi_val:.1f} out of [{rsi_min:.0f}–{rsi_max:.0f}] ({regime})")
 
+    # ── STEP 4: MA STRUCTURE ──────────────────────────────────────
+    ef = params.get("ema_filter", "at_or_above")
+    if ef == "above"       and ema_pos != "above":  return rej(f"Price {ema_pos} EMA20 (need above)")
+    if ef == "at_or_above" and ema_pos == "below" and not ma_ok:
+        return rej("Price below EMA20 and no alternative MA condition met")
+
+    # ── STEP 5: MACD ──────────────────────────────────────────────
+    # Histogram > 0 OR crossover in last 5 days (OR condition)
+    macd_ok = (macd_hist > 0) or macd_cross_5d
+    mf = params.get("macd_filter", "bullish_neutral")
+    if mf == "bullish" and macd_sig != "bullish":
+        return rej(f"MACD {macd_sig} (need bullish)")
+    if mf == "bullish_neutral" and macd_sig == "bearish" and not macd_cross_5d:
+        return rej("MACD bearish with no recent crossover")
+
+    # ── STEP 6: VOLUME CONFIRMATION ───────────────────────────────
     vol_min = float(params.get("vol_min", rcfg["vol_min"]))
     if vol_ratio < vol_min:
         return rej(f"Avg vol {vol_ratio:.2f}x < {vol_min:.1f}x ({regime})")
 
-    ef = params.get("ema_filter", "at_or_above")
-    if ef == "above"       and ema_pos != "above":  return rej(f"Price {ema_pos} EMA20 (need above)")
-    if ef == "at_or_above" and ema_pos == "below":   return rej("Price below EMA20")
-
-    mf = params.get("macd_filter", "bullish_neutral")
-    if mf == "bullish"         and macd_sig != "bullish":  return rej(f"MACD {macd_sig}")
-    if mf == "bullish_neutral" and macd_sig == "bearish":  return rej("MACD bearish")
-
+    # ── STEP 2: RELATIVE STRENGTH FILTER ─────────────────────────
     rs_required = rcfg["rs_required"] or params.get("rs_filter", False)
-    if rs_required and rs_ok is False:
-        return rej(f"RS: stock {s_ret}% vs Nifty {n_ret}% (underperforming, {regime})")
+    if rs_required and not rs_ok:
+        return rej(f"RS: 5d stock {s_ret_5d}% vs Nifty {n_ret_5d}%, 10d {s_ret_10d}% vs {n_ret_10d}% (underperforming)")
 
+    # ── OTHER OPTIONAL GATES ──────────────────────────────────────
     hl_required = rcfg["higher_lows_req"] or params.get("higher_lows", False)
     if hl_required and not higher_lows_ok:
         return rej(f"Higher lows required in {regime}")
@@ -728,60 +927,69 @@ def analyze_stock(sym_info, df, params, context):
     if del_min > 0 and (del_pct is None or del_pct < del_min):
         return rej(f"Delivery% {del_pct if del_pct is not None else 'N/A'} < {del_min:.0f}%")
 
-    # ── SCORING (regime-weighted 100-pt scale) ────────────────────
-    w = rcfg; score = 0
+    # ── STEP 8: FUNDAMENTALS (optional, slow) ─────────────────────
+    fundamentals = {}
+    if params.get("fetch_fundamentals"):
+        fundamentals = fetch_fundamentals_quick(sym)
 
-    rsi_sw = w["w_rsi"]
-    if 50 <= rsi_val <= 63:   score += rsi_sw
-    elif 45 <= rsi_val < 50:  score += int(rsi_sw * 0.6)
-    elif 63 < rsi_val <= 70:  score += int(rsi_sw * 0.5)
-    else:                     score += int(rsi_sw * 0.2)
+    # ── STEP 9: FINAL SCORING (100-pt fixed breakdown) ────────────
+    score = 0
 
-    vol_w = w["w_volume"]
-    if vol_ratio >= 2.5 and vol_consistent: score += vol_w
-    elif vol_ratio >= 2.0:                  score += int(vol_w * 0.85)
-    elif vol_ratio >= 1.7:                  score += int(vol_w * 0.70)
-    elif vol_ratio >= vol_min:              score += int(vol_w * 0.50)
+    # RS vs Nifty 5-day: max 25 pts
+    diff5 = ((s_ret_5d or 0) - (n_ret_5d or 0))
+    if diff5 >= 5:    score += 25
+    elif diff5 >= 2:  score += 15
+    elif diff5 >= 1:  score += 10
+    elif diff5 >= 0:  score += 5
 
-    ema_w = w["w_ema"]; above_ema50 = price > ema50
-    if ema_pos == "above" and above_ema50: score += ema_w
-    elif ema_pos == "above":               score += int(ema_w * 0.75)
-    elif ema_pos == "at":                  score += int(ema_w * 0.45)
+    # RSI sweet spot: max 15 pts
+    if 55 <= rsi_val <= 65:    score += 15
+    elif 50 <= rsi_val < 55:   score += 10
+    elif 45 <= rsi_val < 50 or 65 < rsi_val <= 68: score += 5
 
-    macd_w = w["w_macd"]
-    if macd_sig == "bullish":   score += macd_w
-    elif macd_sig == "neutral": score += int(macd_w * 0.40)
+    # MA alignment: max 15 pts (proportional to conditions met)
+    score += min(15, ma_conds_met * 5)
 
-    rs_w = w["w_rs"]
-    if rs_ok and rs_sector_ok:                             score += rs_w
-    elif rs_ok and rs_sector_ok is None:                   score += int(rs_w * 0.80)
-    elif rs_nifty_ok and not rs_sector_ok:                 score += int(rs_w * 0.50)
-    elif rs_nifty_ok is None and rs_sector_ok is None:     score += int(rs_w * 0.40)
+    # MACD: max 10 pts
+    if macd_sig == "bullish":    score += 10
+    elif macd_cross_5d:          score += 7
+    elif macd_hist > 0:          score += 4
 
-    adx_w = w["w_adx"]
-    if adx_val is not None:
-        if adx_val >= 30:      score += adx_w
-        elif adx_val >= 25:    score += int(adx_w * 0.75)
-        elif adx_val >= 20:    score += int(adx_w * 0.50)
-        else:                  score += int(adx_w * 0.20)
+    # Volume confirmation: max 10 pts
+    if vol_ratio >= 2.0:         score += 10
+    elif vol_ratio >= 1.5:       score += 7
+    elif vol_ratio >= 1.2:       score += 5
 
-    del_w = w["w_delivery"]
-    if del_pct is not None:
-        if del_pct >= 65:      score += del_w
-        elif del_pct >= 50:    score += int(del_w * 0.80)
-        elif del_pct >= 40:    score += int(del_w * 0.60)
-        elif del_pct >= 25:    score += int(del_w * 0.25)
+    # Sector bonus: max 10 pts (scaled from -2..+3 raw)
+    sector_pts = {3: 10, 2: 7, 1: 3, 0: 0, -1: -3, -2: -7}.get(sector_bonus, 0)
+    score = max(0, score + sector_pts)
 
-    pat_w = w["w_pattern"]
-    if higher_lows_ok: score += int(pat_w * 0.60)
-    if consol_break:   score += int(pat_w * 0.40)
-    if breakout_20d:   score += int(pat_w * 0.30)
+    # Fundamental score: max 10 pts
+    if fundamentals:
+        f_score = 4  # start at midpoint
+        pe = fundamentals.get("pe"); roe = fundamentals.get("roe"); de = fundamentals.get("de")
+        mcap_ok = fundamentals.get("mcap_ok", True)
+        if pe and pe <= 30:       f_score += 3
+        elif pe and pe <= 50:     f_score += 1
+        elif pe and pe > 60:      f_score -= 2
+        if roe and roe > 20:      f_score += 3
+        elif roe and roe > 12:    f_score += 1
+        if de and de > 2.0:       f_score -= 2
+        if mcap_ok:               f_score += 1
+        score += max(0, min(10, f_score))
+    else:
+        score += 5  # neutral when fundamentals not fetched
+
+    # 52-week range position: max 5 pts (prefer 40–80th %ile)
+    if 40 <= pctile_52wk <= 80:       score += 5
+    elif 30 <= pctile_52wk < 40 or 80 < pctile_52wk <= 90: score += 3
+    else:                              score += 1
 
     score = min(score, 100)
 
-    min_score = int(params.get("min_score", rcfg["min_score"]) or rcfg["min_score"])
+    min_score = int(params.get("min_score", 0) or 0)
     if score < min_score:
-        return rej(f"Score {score} < min {min_score} ({regime})")
+        return rej(f"Score {score} < min {min_score}")
 
     # ── SIGNAL CLASSIFICATION ─────────────────────────────────────
     breadth_ok = context.get("breadth", {}).get("breadth_ok", True)
@@ -793,7 +1001,7 @@ def analyze_stock(sym_info, df, params, context):
             and rs_ok is not False
             and (regime not in (REGIME_BEAR, REGIME_CRISIS) or higher_lows_ok)):
         sig = "STRONG BUY"
-    elif score >= rcfg["buy_score"] and macd_sig in ("bullish", "neutral") and ema_pos in ("above", "at"):
+    elif score >= rcfg["buy_score"] and (macd_sig in ("bullish", "neutral") or macd_cross_5d) and ema_pos in ("above", "at"):
         sig = "BUY"
     else:
         sig = "WATCH"
@@ -809,50 +1017,69 @@ def analyze_stock(sym_info, df, params, context):
         "regime": regime,
         "rsi": round(rsi_val, 1),
         "vol_ratio": round(vol_ratio, 2), "vol_consistent": vol_consistent,
-        "ema_pos": ema_pos, "ema20": round(ema20, 2), "ema50": round(ema50, 2),
+        "ema_pos": ema_pos, "ema20": round(ema20, 2), "ema50": round(ema50, 2), "ema200": round(ema200, 2),
         "above_ema50": above_ema50, "macd": macd_sig,
+        "macd_hist": macd_hist, "macd_crossover_5d": macd_cross_5d,
+        "ma_ok": ma_ok, "ma_conds_met": ma_conds_met, "ma_detail": ma_detail,
         "atr": atr_val, "atr_pct": atr_pct, "adx": adx_val,
         "bb_pos": bb_pos, "bb_upper": bb_up, "bb_middle": bb_mid,
         "higher_lows": higher_lows_ok, "no_gap_down": no_gap_ok,
         "momentum": momentum, "consol_breakout": consol_break, "consol_range_pct": consol_pct,
-        "rs_vs_nifty": s_ret, "nifty_10d": n_ret, "rs_nifty_ok": rs_nifty_ok,
+        "rs_vs_nifty": s_ret_10d, "nifty_10d": n_ret_10d, "rs_nifty_ok": rs_nifty_ok,
+        "s_ret_5d": s_ret_5d, "n_ret_5d": n_ret_5d, "rs_5d_ok": rs_5d_ok,
         "rs_vs_sector": rs_s, "sector_10d": rs_sec, "rs_sector_ok": rs_sector_ok,
-        "pct_below_52wk": pct_below_52, "delivery_pct": del_pct,
+        "pct_below_52wk": pct_below_52, "pctile_52wk": pctile_52wk,
+        "delivery_pct": del_pct, "sector_bonus": sector_bonus,
         "breakout_20d": breakout_20d, "score": score, "sig": sig,
+        "fundamentals": fundamentals if fundamentals else None,
         "breadth_downgraded": (sig != "STRONG BUY" and score >= rcfg["strong_buy_score"]),
-        # ── Backward-compat aliases for existing frontend ──────────
-        "rs_stock":    s_ret,
-        "rs_nifty":    n_ret,
-        "rs_ok":       rs_ok,
+        # ── Backward-compat aliases ────────────────────────────────
+        "rs_stock":     s_ret_10d,
+        "rs_nifty":     n_ret_10d,
+        "rs_ok":        rs_ok,
         "pct_below_52": pct_below_52,
-        "breakout":    breakout_20d,
+        "breakout":     breakout_20d,
     }
 
-    # ── ATR-BASED TARGETS AND STOP LOSS ──────────────────────────
-    if sig in ("STRONG BUY", "BUY") and atr_val is not None:
-        sl_mult  = rcfg["sl_atr_mult"]; t1_mult = rcfg["t1_atr_mult"]; t2_mult = rcfg["t2_atr_mult"]
-        min_rr   = rcfg["min_rr"]
-        support  = float(np.min(lows[-11:-1])) if len(lows) > 11 else float(np.min(lows[:-1]))
-        sl_price = max(support, price - (atr_val * sl_mult), price * 0.96)
-        sl_pct   = (price - sl_price) / price * 100
-        t1_atr   = price + (atr_val * t1_mult)
-        t1_price = max(t1_atr, price * (1 + (sl_pct * min_rr) / 100))
-        t2_price = price + (atr_val * t2_mult)
-        t1_pct   = (t1_price - price) / price * 100
-        actual_rr = t1_pct / sl_pct if sl_pct > 0 else 0
-        shares    = int(20000 // price)
-        buy_low   = round(price * 0.990, 2)
-        buy_high  = round(price * 1.005, 2)
+    # ── STEP 9 ADDITIONAL: Why rationale + Key Risk ───────────────
+    why, key_risk = generate_rationale(result)
+    result["why_rationale"] = why
+    result["key_risk"]      = key_risk
 
+    # ── STEP 10: TARGETS AND STOP LOSS ───────────────────────────
+    if sig in ("STRONG BUY", "BUY"):
+        # Buy Range: Lower = max(price×0.98, 20EMA), Upper = price×1.01
+        buy_low   = round(max(price * 0.98, ema20), 2)
+        buy_high  = round(price * 1.01, 2)
+        entry     = (buy_low + buy_high) / 2  # midpoint entry for calculations
+
+        # Target: entry×1.05 (5% gain in 1 week per requirement)
+        t1_price  = round(entry * 1.05, 2)
+        # Cap at 50EMA or 200EMA if they're closer (resistance)
+        resistances = [r for r in [ema50, ema200] if r > price * 1.01]
+        if resistances:
+            nearest_res = min(resistances)
+            if nearest_res < t1_price:
+                t1_price = round(nearest_res * 0.998, 2)
+
+        # SL: entry×0.965 (3.5% below), floored at 20EMA−0.5%
+        sl_price  = round(max(entry * 0.965, ema20 * 0.995), 2)
+        sl_pct    = round((entry - sl_price) / entry * 100, 2)
+        t1_pct    = round((t1_price - entry) / entry * 100, 2)
+        actual_rr = round(t1_pct / sl_pct, 2) if sl_pct > 0 else 0
+
+        # T2 as 6.5% above entry (stretch target)
+        t2_price  = round(entry * 1.065, 2)
+
+        shares   = int(20000 // price)
         result.update({
-            "t1": round(t1_price, 2), "t2": round(t2_price, 2), "sl": round(sl_price, 2),
-            "sl_pct": round(sl_pct, 2), "t1_pct": round(t1_pct, 2), "rr": round(actual_rr, 2),
+            "t1": t1_price, "t2": t2_price, "sl": sl_price,
+            "sl_pct": sl_pct, "t1_pct": t1_pct, "rr": actual_rr,
             "buy_range_low": buy_low, "buy_range_high": buy_high,
             "shares_20k": shares,
             "exp_profit_20k": round(shares * (t1_price - price), 2),
             "max_loss_20k":   round(shares * (price - sl_price), 2),
-            # Backward-compat alias
-            "tp_pct": round(t1_pct, 2),
+            "tp_pct": t1_pct,  # backward-compat alias
         })
 
     return result

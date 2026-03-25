@@ -362,17 +362,17 @@ tbody tr{animation:fadeUp .18s ease both}
       </select>
     </div>
     <div class="fg">
-      <div class="fg-lbl">RSI Range</div>
+      <div class="fg-lbl">RSI Range <span style="font-size:9px;color:var(--muted)">(Step 3: 45–68)</span></div>
       <div class="fg-row">
         <input type="number" id="rsiMin" value="45" min="1" max="98" step="1">
         <span style="color:var(--muted)">–</span>
-        <input type="number" id="rsiMax" value="70" min="2" max="99" step="1">
+        <input type="number" id="rsiMax" value="68" min="2" max="99" step="1">
       </div>
     </div>
     <div class="fg">
-      <div class="fg-lbl">Volume (vs 20d avg)</div>
+      <div class="fg-lbl">Volume (3d avg vs 20d) <span style="font-size:9px;color:var(--muted)">(Step 6: ≥1.2×)</span></div>
       <div class="fg-row">
-        <input type="number" id="volMin" value="1.4" min="0.5" max="20" step="0.1" style="width:80px">
+        <input type="number" id="volMin" value="1.2" min="0.5" max="20" step="0.1" style="width:80px">
         <span style="font-size:11px;color:var(--muted)">× min</span>
       </div>
     </div>
@@ -406,7 +406,7 @@ tbody tr{animation:fadeUp .18s ease both}
   <div class="fgrid">
     <div class="fg">
       <label class="tog"><input type="checkbox" id="rsFilter" checked><span class="tog-track"></span><span class="tog-lbl">Relative Strength vs Nifty</span></label>
-      <div class="tog-hint">Stock 10d return > Nifty 10d</div>
+      <div class="tog-hint">5d return > Nifty+1.5% OR 10d > Nifty+2%</div>
     </div>
     <div class="fg">
       <label class="tog"><input type="checkbox" id="higherLowsFilter" checked><span class="tog-track"></span><span class="tog-lbl">Higher Lows Pattern</span></label>
@@ -467,6 +467,10 @@ tbody tr{animation:fadeUp .18s ease both}
     <div class="fg">
       <label class="tog"><input type="checkbox" id="breadthFilter" checked><span class="tog-track"></span><span class="tog-lbl">Market Breadth Gate</span></label>
       <div class="tog-hint">A/D < 1.2 → downgrade STRONG BUY</div>
+    </div>
+    <div class="fg">
+      <label class="tog"><input type="checkbox" id="fetchFundamentals"><span class="tog-track"></span><span class="tog-lbl">Fetch Fundamentals (slower)</span></label>
+      <div class="tog-hint">PE, ROE, D/E from yfinance .info (Step 8)</div>
     </div>
   </div>
 </div>
@@ -553,14 +557,15 @@ function getProxy(){const m=document.querySelector('meta[name="proxy-url"]');ret
 const PROXY=getProxy();
 
 const DEFAULTS={
-  rsiMin:45,rsiMax:70,volMin:1.4,
+  rsiMin:45,rsiMax:68,volMin:1.2,
   emaFilter:"at_or_above",macdFilter:"bullish_neutral",minScore:0,
-  rsFilter:true,high52Filter:true,high52Pct:25,higherLowsFilter:true,
+  rsFilter:true,high52Filter:true,high52Pct:25,higherLowsFilter:false,
   atrFilter:true,atrMin:1.5,atrMax:4.0,
   sectorMomentumFilter:false,earningsFilter:true,
   fiiDiiFilter:false,deliveryFilter:false,deliveryMin:40,
-  bbFilter:true,adxFilter:true,adxMin:20,
-  noGapDownFilter:true,breadthFilter:true,
+  bbFilter:false,adxFilter:false,adxMin:20,
+  noGapDownFilter:false,breadthFilter:true,
+  fetchFundamentals:false,
 };
 
 let allResults=[],rejectedResults=[],filteredResults=[];
@@ -664,6 +669,7 @@ function resetFilters(){
   chk("deliveryFilter",DEFAULTS.deliveryFilter);set("deliveryMin",DEFAULTS.deliveryMin);
   chk("bbFilter",DEFAULTS.bbFilter);chk("adxFilter",DEFAULTS.adxFilter);set("adxMin",DEFAULTS.adxMin);
   chk("noGapDownFilter",DEFAULTS.noGapDownFilter);chk("breadthFilter",DEFAULTS.breadthFilter);
+  chk("fetchFundamentals",DEFAULTS.fetchFundamentals);
 }
 
 // ── RUN SCREENER ──────────────────────────────────────────────
@@ -700,6 +706,7 @@ async function runScreen(){
     adx_min:chk("adxFilter")?num("adxMin",20):0,
     no_gap_down:chk("noGapDownFilter"),
     breadth_filter:chk("breadthFilter"),
+    fetch_fundamentals:chk("fetchFundamentals"),
   };
 
   try{
@@ -800,27 +807,50 @@ function th(k,l){
 }
 
 function techCell(r){
-  // RSI pill
   const rsiCls=r.rsi>=60?"pill-a":r.rsi>=50?"pill-g":"pill-m";
   const rsiPill=`<span class="pill ${rsiCls}">RSI ${r.rsi}</span>`;
-  // Vol pill
   const vCls=r.vol_ratio>=2?"pill-g":r.vol_ratio>=1.5?"pill-a":"pill-m";
   const vPill=`<span class="pill ${vCls}">Vol ${r.vol_ratio}×</span>`;
-  // EMA+MACD line
   const emaCls=r.ema_pos==="above"?"pill-g":r.ema_pos==="at"?"pill-m":"pill-n";
   const emaLbl=r.ema_pos==="above"?"▲ EMA":r.ema_pos==="at"?"≈ EMA":"▼ EMA";
-  const emaPill=`<span class="pill ${emaCls}">${emaLbl}</span>`;
+  const maConds=r.ma_conds_met!=null?` (${r.ma_conds_met}/4)`:"";
+  const emaPill=`<span class="pill ${emaCls}">${emaLbl}${maConds}</span>`;
   const macdCls=r.macd==="bullish"?"pill-up":r.macd==="bearish"?"pill-dn":"pill-n";
+  const macdXover=r.macd_crossover_5d?`<span class="pill pill-g" style="font-size:9px">XO</span>`:"";
   const macdLbl=r.macd==="bullish"?"▲ MACD":r.macd==="bearish"?"▼ MACD":"→ MACD";
-  const macdPill=`<span class="pill ${macdCls}">${macdLbl}</span>`;
+  const macdPill=`<span class="pill ${macdCls}">${macdLbl}</span>${macdXover}`;
   return`<div class="tech"><div class="tech-row">${rsiPill} ${vPill}</div><div class="tech-row">${emaPill} ${macdPill}</div></div>`;
 }
 
 function rsCell(r){
-  if(r.rs_stock==null)return`<span class="rs-na">—</span>`;
-  const diff=(r.rs_stock-(r.rs_nifty||0)).toFixed(1);
-  const cls=r.rs_ok?"rs-pos":"rs-neg";
-  return`<span class="${cls}" title="Stock: ${r.rs_stock}% | Nifty: ${r.rs_nifty}%">${r.rs_ok?"▲":"▼"}${diff>0?"+":""}${diff}%</span>`;
+  // Show 5d RS primarily (per new requirement)
+  const s5=r.s_ret_5d,n5=r.n_ret_5d,s10=r.rs_vs_nifty,n10=r.rs_nifty;
+  if(s5==null&&s10==null)return`<span class="rs-na">—</span>`;
+  const diff5=s5!=null?(s5-(n5||0)).toFixed(1):null;
+  const diff10=s10!=null?(s10-(n10||0)).toFixed(1):null;
+  const ok=r.rs_ok;
+  const cls=ok?"rs-pos":"rs-neg";
+  const title=`5d: stock ${s5}% / Nifty ${n5}% | 10d: stock ${s10}% / Nifty ${n10}%`;
+  const label=diff5!=null?`${ok?"▲":"▼"}${diff5>0?"+":""}${diff5}%<span class="pct"> 5d</span>`:
+                           `${ok?"▲":"▼"}${diff10>0?"+":""}${diff10}%<span class="pct"> 10d</span>`;
+  return`<span class="${cls}" title="${title}">${label}</span>`;
+}
+
+function fundCell(r){
+  const f=r.fundamentals;
+  if(!f)return`<span class="rs-na" style="font-size:9px">—</span>`;
+  const peStr=f.pe!=null?`PE ${f.pe}${f.pe_flag?" ⚠":""}`:null;
+  const roeStr=f.roe!=null?`ROE ${f.roe}%`:null;
+  const deStr=f.de!=null?`D/E ${f.de}${f.de_flag?" ⚠":""}`:null;
+  const parts=[peStr,roeStr,deStr].filter(Boolean);
+  return`<div style="font-family:'JetBrains Mono',monospace;font-size:9px;line-height:1.6;color:var(--sub)">${parts.join("<br>")}</div>`;
+}
+
+function pos52Cell(r){
+  const p=r.pctile_52wk;
+  if(p==null)return`<span class="rs-na">—</span>`;
+  const cls=p>=40&&p<=80?"rs-pos":p<20||p>90?"rs-neg":"rs-na";
+  return`<span class="${cls}" style="font-family:'JetBrains Mono',monospace;font-size:11px" title="${r.pct_below_52wk}% below 52wk high">${p.toFixed(0)}%ile</span>`;
 }
 
 function targetCell(r){
@@ -867,37 +897,55 @@ function renderTable(data,interim){
         ${th("sym","Symbol")}
         ${th("score","Score")}
         ${th("sig","Signal")}
-        <th>Price</th>
+        <th>Price / Buy Range</th>
         <th>Technicals</th>
-        ${th("rs_stock","RS vs Nifty")}
+        ${th("s_ret_5d","RS vs Nifty")}
         <th>T1 / SL</th>
         ${th("rr","R:R")}
+        ${th("pctile_52wk","52Wk")}
         ${th("sector","Sector")}
+        <th>Fundmtls</th>
         <th>Action</th>
       </tr></thead>
-      <tbody>${sorted.map((r,idx)=>`<tr style="animation-delay:${idx*.02}s">
-        <td>
-          <div class="sym-name">
-            <span class="sd ${r.sig==="STRONG BUY"?"sd-g":r.sig==="BUY"?"sd-b":"sd-a"}"></span>
-            ${r.sym}
-            ${r.higher_lows?'<span class="pill pill-g" style="font-size:9px">HL</span>':""}
-            ${r.consol_breakout?'<span class="pill pill-a" style="font-size:9px">BKO</span>':""}
-          </div>
-          <div class="sym-sub">${r.name||""}</div>
-        </td>
-        <td>${ring(r.score)}</td>
-        <td>${badge(r.sig)}</td>
-        <td>
-          <div class="price-main">₹${(r.price||0).toLocaleString("en-IN",{maximumFractionDigits:2})}</div>
-          ${r.sig!=="WATCH"?`<div class="buy-range">₹${(r.price*.990).toLocaleString("en-IN",{maximumFractionDigits:2})} – ₹${(r.price*1.005).toLocaleString("en-IN",{maximumFractionDigits:2})}</div>`:""}
-        </td>
-        <td>${techCell(r)}</td>
-        <td>${rsCell(r)}</td>
-        <td>${targetCell(r)}</td>
-        <td>${rrCell(r)}</td>
-        <td><span class="stag">${r.sector}</span></td>
-        <td>${(r.sig==="BUY"||r.sig==="STRONG BUY")?`<button class="btn-trade" onclick="openTradeModal('${r.sym}')">+ Register</button>`:`<span style="color:var(--muted);font-size:10px">—</span>`}</td>
-      </tr>`).join("")}</tbody>
+      <tbody>${sorted.map((r,idx)=>{
+        const hasRationale=r.why_rationale&&r.why_rationale!=="Passes all technical filters";
+        const rowId=`why-${r.sym}-${idx}`;
+        const mainRow=`<tr style="animation-delay:${idx*.02}s">
+          <td>
+            <div class="sym-name">
+              <span class="sd ${r.sig==="STRONG BUY"?"sd-g":r.sig==="BUY"?"sd-b":"sd-a"}"></span>
+              ${r.sym}
+              ${r.higher_lows?'<span class="pill pill-g" style="font-size:9px">HL</span>':""}
+              ${r.consol_breakout?'<span class="pill pill-a" style="font-size:9px">BKO</span>':""}
+            </div>
+            <div class="sym-sub">${r.name||""}</div>
+          </td>
+          <td>${ring(r.score)}</td>
+          <td>${badge(r.sig)}</td>
+          <td>
+            <div class="price-main">₹${(r.price||0).toLocaleString("en-IN",{maximumFractionDigits:2})}</div>
+            ${r.sig!=="WATCH"&&r.buy_range_low?`<div class="buy-range">₹${r.buy_range_low.toLocaleString("en-IN",{maximumFractionDigits:2})} – ₹${r.buy_range_high.toLocaleString("en-IN",{maximumFractionDigits:2})}</div>`:""}
+            ${r.shares_20k?`<div style="font-family:'JetBrains Mono',monospace;font-size:9px;color:var(--muted)">${r.shares_20k} sh · ₹20k</div>`:""}
+          </td>
+          <td>${techCell(r)}</td>
+          <td>${rsCell(r)}</td>
+          <td>${targetCell(r)}</td>
+          <td>${rrCell(r)}</td>
+          <td>${pos52Cell(r)}</td>
+          <td><span class="stag">${r.sector}</span>${r.sector_bonus&&r.sector_bonus!==0?`<span class="pill ${r.sector_bonus>0?"pill-g":"pill-dn"}" style="font-size:9px;margin-left:3px">${r.sector_bonus>0?"+":""}${r.sector_bonus}</span>`:""}</td>
+          <td>${fundCell(r)}</td>
+          <td style="white-space:nowrap">
+            ${(r.sig==="BUY"||r.sig==="STRONG BUY")?`<button class="btn-trade" onclick="openTradeModal('${r.sym}')">+ Register</button>`:`<span style="color:var(--muted);font-size:10px">—</span>`}
+            ${r.why_rationale?`<button class="btn btn-g" style="font-size:9px;padding:2px 6px;margin-top:3px;display:block" onclick="document.getElementById('${rowId}').classList.toggle('hidden')">Why?</button>`:""}
+          </td>
+        </tr>`;
+        const detailRow=r.why_rationale?`<tr id="${rowId}" class="hidden"><td colspan="12" style="padding:8px 16px 10px;background:var(--accent-lt);border-top:1px solid var(--accent-br)">
+          <div style="font-size:11px;color:#1e40af;margin-bottom:4px"><strong>Why this stock:</strong> ${r.why_rationale}</div>
+          <div style="font-size:11px;color:var(--red)"><strong>Key Risk:</strong> ${r.key_risk||"—"}</div>
+          ${r.exp_profit_20k?`<div style="font-size:10px;color:var(--sub);margin-top:4px">Expected Profit (₹20k): <strong style="color:var(--green)">₹${r.exp_profit_20k.toLocaleString("en-IN")}</strong> · Max Loss: <strong style="color:var(--red)">₹${r.max_loss_20k.toLocaleString("en-IN")}</strong></div>`:""}
+        </td></tr>`:"";
+        return mainRow+detailRow;
+      }).join("")}</tbody>
     </table></div>
   </div>`;
 }
@@ -1092,6 +1140,112 @@ async function checkOutcomes(){
     if(d.ok)await loadHistory();
   }catch(e){showToast("Network error.","err");}
   finally{btn.disabled=false;btn.textContent="⚡ Check Outcomes";}
+}
+
+// ── TRADE MODAL ───────────────────────────────────────────────
+let _tradeTarget=null;
+function openTradeModal(sym){
+  const r=allResults.find(x=>x.sym===sym);
+  if(!r)return;
+  _tradeTarget=r;
+  document.getElementById("tradeModalSym").textContent=r.sym;
+  document.getElementById("tradeModalName").textContent=r.name||"";
+  document.getElementById("tradeModalBadge").innerHTML=badge(r.sig);
+  const info=r.buy_range_low?`Buy ₹${r.buy_range_low}–₹${r.buy_range_high} · T1 ₹${r.t1||"—"} · SL ₹${r.sl||"—"}`:
+             `Price ₹${r.price}`;
+  document.getElementById("tradeModalInfo").textContent=info;
+  document.getElementById("tradeBuyPrice").value=r.price||"";
+  document.getElementById("tradeQty").value=r.shares_20k||Math.floor(20000/(r.price||1));
+  document.getElementById("tradeErr").textContent="";
+  document.getElementById("tradeModal").style.display="flex";
+}
+function closeTradeModal(){
+  document.getElementById("tradeModal").style.display="none";
+  _tradeTarget=null;
+}
+async function submitTrade(){
+  if(!_tradeTarget)return;
+  const buyPrice=parseFloat(document.getElementById("tradeBuyPrice").value);
+  const qty=parseInt(document.getElementById("tradeQty").value);
+  const errEl=document.getElementById("tradeErr");
+  if(!buyPrice||buyPrice<=0){errEl.textContent="Enter a valid buy price.";return;}
+  if(!qty||qty<=0){errEl.textContent="Enter a valid quantity.";return;}
+  const btn=document.getElementById("tradeSubmitBtn");
+  btn.disabled=true;btn.textContent="Saving…";errEl.textContent="";
+  const row={..._tradeTarget,price:buyPrice,shares_20k:qty,
+    buy_range_low:_tradeTarget.buy_range_low||round2(buyPrice*0.99),
+    buy_range_high:_tradeTarget.buy_range_high||round2(buyPrice*1.01),
+    t1:_tradeTarget.t1||round2(buyPrice*1.05),
+    sl:_tradeTarget.sl||round2(buyPrice*0.965),
+  };
+  try{
+    const r=await fetch(`${PROXY}/save-trades`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify([row])});
+    const d=await r.json();
+    if(d.ok){closeTradeModal();showToast(`Trade registered: ${_tradeTarget?.sym||""}${d.saved?" (saved to DB)":""}`,d.ok?"ok":"info");loadActiveTrades();}
+    else errEl.textContent=d.error||"Save failed — is Supabase configured?";
+  }catch(e){errEl.textContent="Network error.";}
+  finally{btn.disabled=false;btn.textContent="✓ Register Trade";}
+}
+function round2(x){return Math.round(x*100)/100;}
+
+// ── ACTIVE TRADES ─────────────────────────────────────────────
+async function loadActiveTrades(){
+  try{
+    const r=await fetch(`${PROXY}/trades`,{signal:AbortSignal.timeout(8000)});
+    const d=await r.json();
+    if(!d.ok)return;
+    const open=(d.trades||[]).filter(t=>t.status==="open");
+    const panel=document.getElementById("activeTrades");
+    const list=document.getElementById("activeTradeList");
+    const cnt=document.getElementById("activeTradeCount");
+    if(!open.length){panel.classList.remove("show");return;}
+    panel.classList.add("show");
+    cnt.textContent=open.length;
+    list.innerHTML=open.map(t=>`<div class="at-row">
+      <div><div class="at-sym">${t.symbol}</div><div class="at-sym-sub">${t.sector||""}</div></div>
+      <div class="at-meta">
+        <span>Entry ₹${(+t.entry_price||0).toLocaleString("en-IN",{maximumFractionDigits:2})}</span>
+        <span>T1 ₹${(+t.target1||0).toLocaleString("en-IN",{maximumFractionDigits:2})}</span>
+        <span>SL ₹${(+t.stop_loss||0).toLocaleString("en-IN",{maximumFractionDigits:2})}</span>
+      </div>
+      <div></div>
+      <div class="at-pnl zero">Open</div>
+    </div>`).join("");
+  }catch(e){console.warn("[ActiveTrades]",e);}
+}
+
+async function refreshActivePnL(){
+  try{
+    const r=await fetch(`${PROXY}/trades`,{signal:AbortSignal.timeout(8000)});
+    const d=await r.json();
+    if(!d.ok)return;
+    const open=(d.trades||[]).filter(t=>t.status==="open");
+    if(!open.length)return;
+    const syms=open.map(t=>t.symbol).join(",");
+    const lr=await fetch(`${PROXY}/ltp?symbols=${syms}`,{signal:AbortSignal.timeout(10000)});
+    const ld=await lr.json();
+    const prices=ld.prices||{};
+    const list=document.getElementById("activeTradeList");
+    list.innerHTML=open.map(t=>{
+      const lp=prices[t.symbol]?.ltp;
+      const entry=+(t.entry_price||0);
+      const qty=+(t.shares_20k||0);
+      const pnl=lp&&entry?round2((lp-entry)*qty):null;
+      const pnlCls=pnl==null?"zero":pnl>0?"pos":"neg";
+      const pnlStr=pnl==null?"—":pnl>0?`+₹${pnl.toLocaleString("en-IN")}`:`-₹${Math.abs(pnl).toLocaleString("en-IN")}`;
+      return`<div class="at-row">
+        <div><div class="at-sym">${t.symbol}</div><div class="at-sym-sub">${t.sector||""}</div></div>
+        <div class="at-meta">
+          <span>Entry ₹${entry.toLocaleString("en-IN",{maximumFractionDigits:2})}</span>
+          <span>T1 ₹${(+t.target1||0).toLocaleString("en-IN",{maximumFractionDigits:2})}</span>
+          <span>SL ₹${(+t.stop_loss||0).toLocaleString("en-IN",{maximumFractionDigits:2})}</span>
+          ${lp?`<span>LTP ₹${lp.toLocaleString("en-IN",{maximumFractionDigits:2})}</span>`:""}
+        </div>
+        <div></div>
+        <div class="at-pnl ${pnlCls}">${pnlStr}</div>
+      </div>`;
+    }).join("");
+  }catch(e){console.warn("[RefreshPnL]",e);}
 }
 
 // ── HELPERS ───────────────────────────────────────────────────
