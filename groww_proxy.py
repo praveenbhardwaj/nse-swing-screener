@@ -1119,54 +1119,54 @@ def check_outcomes():
     upd_lock   = threading.Lock()
 
     def check_one(trade):
-        sym = trade["symbol"]
-        t1  = float(trade["target1"])
-        sl  = float(trade["stop_loss"])
-        raw = trade.get("scanned_at", "")
         try:
+            sym = trade["symbol"]
+            t1  = float(trade["target1"])
+            sl  = float(trade["stop_loss"])
+            raw = trade.get("scanned_at", "")
             start = pd.Timestamp(raw).normalize() + pd.Timedelta(days=1)
-        except Exception:
-            return
-        today = pd.Timestamp.now().normalize()
-        if start > today:
-            return
-        try:
+            today = pd.Timestamp.now().normalize()
+            if start > today:
+                return
             df = yf.Ticker(f"{sym}.NS").history(
                 start=start.strftime("%Y-%m-%d"),
                 end=(today + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
                 interval="1d", auto_adjust=True)
-        except Exception:
-            return
-        if df is None or df.empty:
-            return
-        status = outcome_price = outcome_date = days = None
-        for i, (dt, row) in enumerate(df.iterrows()):
-            low  = float(row["Low"])
-            high = float(row["High"])
-            if low <= sl:
-                status        = "sl_hit"
-                outcome_price = sl
-                outcome_date  = dt.date().isoformat()
-                days          = i + 1
-                break
-            elif high >= t1:
-                status        = "target_hit"
-                outcome_price = t1
-                outcome_date  = dt.date().isoformat()
-                days          = i + 1
-                break
-        if status:
-            with upd_lock:
-                updates.append({
-                    "id":              trade["id"],
-                    "status":          status,
-                    "outcome_price":   outcome_price,
-                    "outcome_date":    outcome_date,
-                    "days_to_outcome": days,
-                })
+            if df is None or df.empty:
+                return
+            status = outcome_price = outcome_date = days = None
+            for i, (dt, row) in enumerate(df.iterrows()):
+                low  = float(row["Low"])
+                high = float(row["High"])
+                if low <= sl:
+                    status        = "sl_hit"
+                    outcome_price = sl
+                    outcome_date  = dt.date().isoformat()
+                    days          = i + 1
+                    break
+                elif high >= t1:
+                    status        = "target_hit"
+                    outcome_price = t1
+                    outcome_date  = dt.date().isoformat()
+                    days          = i + 1
+                    break
+            if status:
+                with upd_lock:
+                    updates.append({
+                        "id":              trade["id"],
+                        "status":          status,
+                        "outcome_price":   outcome_price,
+                        "outcome_date":    outcome_date,
+                        "days_to_outcome": days,
+                    })
+        except Exception as e:
+            print(f"[check_one] {trade.get('symbol','?')}: {e}")
 
-    with ThreadPoolExecutor(max_workers=10) as ex:
-        list(ex.map(check_one, open_trades))
+    try:
+        with ThreadPoolExecutor(max_workers=10) as ex:
+            list(ex.map(check_one, open_trades))
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"ThreadPool error: {e}"}), 500
 
     if updates:
         try:
