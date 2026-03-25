@@ -225,9 +225,62 @@ tbody tr{animation:fadeUp .18s ease both}
 .sb-target{background:var(--green-lt);color:var(--green);border:1px solid var(--green-br)}
 .sb-sl{background:var(--red-lt);color:var(--red);border:1px solid var(--red-br)}
 .sb-expired{background:var(--bg);color:var(--muted);border:1px solid var(--border)}
+
+/* REGISTER TRADE BTN */
+.btn-trade{font-family:'Inter',sans-serif;font-size:11px;font-weight:600;padding:5px 11px;border-radius:5px;border:1px solid var(--green-br);background:var(--green-lt);color:var(--green);cursor:pointer;transition:all .15s;white-space:nowrap}
+.btn-trade:hover{background:var(--green);color:#fff}
+
+/* REGISTER TRADE MODAL */
+.trade-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1001;display:flex;align-items:center;justify-content:center}
+.trade-modal-box{background:var(--white);border-radius:var(--r);padding:24px 26px;width:400px;max-width:95vw;box-shadow:0 8px 32px rgba(0,0,0,.18)}
+.trade-modal-stock{display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;margin-bottom:18px}
+.trade-modal-sym{font-size:15px;font-weight:700}
+.trade-modal-name{font-size:11px;color:var(--sub);margin-top:1px}
+.trade-modal-price{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--accent);font-weight:600;margin-left:auto}
+
+/* ACTIVE TRADES PANEL */
+.active-trades{background:var(--white);border:2px solid var(--accent-br);border-radius:var(--r);padding:14px 16px;margin-bottom:18px;box-shadow:var(--shadow);display:none}
+.active-trades.show{display:block}
+.at-hdr{display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+.at-ttl{font-size:13px;font-weight:700;color:var(--accent);flex:1}
+.at-count{font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:700;background:var(--accent-lt);color:var(--accent);border:1px solid var(--accent-br);padding:2px 8px;border-radius:20px}
+.at-list{display:flex;flex-direction:column;gap:8px}
+.at-row{display:grid;grid-template-columns:90px 110px 1fr auto;align-items:center;gap:10px;padding:10px 12px;background:var(--bg);border-radius:6px;border:1px solid var(--border)}
+.at-sym{font-size:13px;font-weight:700}
+.at-sym-sub{font-size:10px;color:var(--muted)}
+.at-meta{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--sub);display:flex;gap:12px;flex-wrap:wrap}
+.at-pnl{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;text-align:right;white-space:nowrap}
+.at-pnl.pos{color:var(--green)}.at-pnl.neg{color:var(--red)}.at-pnl.zero{color:var(--muted)}
+@media(max-width:600px){.at-row{grid-template-columns:1fr 1fr;}}
 </style>
 </head>
 <body>
+
+<!-- REGISTER TRADE MODAL -->
+<div class="trade-modal-overlay" id="tradeModal" style="display:none">
+  <div class="trade-modal-box">
+    <div class="modal-ttl" id="tradeModalTitle">Register Trade</div>
+    <div class="trade-modal-stock" id="tradeModalStock">
+      <div>
+        <div class="trade-modal-sym" id="tradeModalSym">—</div>
+        <div class="trade-modal-name" id="tradeModalName">—</div>
+      </div>
+      <div style="margin-left:auto;text-align:right">
+        <div id="tradeModalBadge"></div>
+        <div class="trade-modal-price" id="tradeModalInfo"></div>
+      </div>
+    </div>
+    <label class="modal-lbl" for="tradeBuyPrice">Buying Price (₹)</label>
+    <input class="modal-inp" type="number" id="tradeBuyPrice" placeholder="Enter your buy price" min="0.01" step="0.05" autocomplete="off">
+    <label class="modal-lbl" for="tradeQty">Quantity (shares)</label>
+    <input class="modal-inp" type="number" id="tradeQty" placeholder="Number of shares to buy" min="1" step="1" autocomplete="off">
+    <div class="modal-err" id="tradeErr"></div>
+    <div style="display:flex;gap:8px;margin-top:4px">
+      <button class="btn btn-g" onclick="closeTradeModal()" style="flex:1">Cancel</button>
+      <button class="btn btn-p" id="tradeSubmitBtn" onclick="submitTrade()" style="flex:2">✓ Register Trade</button>
+    </div>
+  </div>
+</div>
 
 <!-- CREDENTIAL MODAL -->
 <div class="modal-overlay" id="credModal" style="display:none">
@@ -266,6 +319,16 @@ tbody tr{animation:fadeUp .18s ease both}
 
 <!-- ═══════════════ SCREENER TAB ═══════════════ -->
 <div id="tab-screener">
+
+<!-- ACTIVE TRADES PANEL -->
+<div class="active-trades" id="activeTrades">
+  <div class="at-hdr">
+    <span class="at-ttl">⚡ Active Trades</span>
+    <span class="at-count" id="activeTradeCount">0</span>
+    <button class="btn btn-g" style="font-size:11px;padding:4px 10px;margin-left:auto" onclick="refreshActivePnL()">↻ Refresh P&L</button>
+  </div>
+  <div class="at-list" id="activeTradeList"></div>
+</div>
 
 <!-- PROXY STATUS -->
 <div class="proxy-banner proxy-check" id="proxyBanner">
@@ -431,7 +494,6 @@ tbody tr{animation:fadeUp .18s ease both}
   <div class="spin" id="spin"></div>
   <button class="btn btn-warn" id="cancelBtn" onclick="cancelScan()" style="display:none">✕ Cancel</button>
   <button class="btn btn-g" onclick="clearAll()">Clear</button>
-  <button class="btn btn-g" id="saveBtn" onclick="saveScanResults()" style="display:none">💾 Save</button>
   <button class="btn btn-p" id="runBtn" onclick="runScreen()">⚡ Run Screener</button>
 </div>
 
@@ -519,6 +581,7 @@ window.addEventListener("load",async()=>{
   await checkProxy();
   fetchMarketData();
   loadUniverse();
+  loadActiveTrades();
 });
 
 // ── PROXY ─────────────────────────────────────────────────────
@@ -706,8 +769,6 @@ async function finaliseResults(){
   const secF=document.getElementById("secF");const cur=secF.value;
   secF.innerHTML='<option value="all">All Sectors</option>';
   sectors.forEach(s=>{const o=document.createElement("option");o.value=s;o.textContent=s;if(s===cur)o.selected=true;secF.appendChild(o);});
-  const hasBuyable=allResults.some(r=>r.sig==="BUY"||r.sig==="STRONG BUY");
-  document.getElementById("saveBtn").style.display=hasBuyable?"inline-flex":"none";
 }
 
 // ── CLIENT FILTERS ────────────────────────────────────────────
@@ -812,6 +873,7 @@ function renderTable(data,interim){
         <th>T1 / SL</th>
         ${th("rr","R:R")}
         ${th("sector","Sector")}
+        <th>Action</th>
       </tr></thead>
       <tbody>${sorted.map((r,idx)=>`<tr style="animation-delay:${idx*.02}s">
         <td>
@@ -834,6 +896,7 @@ function renderTable(data,interim){
         <td>${targetCell(r)}</td>
         <td>${rrCell(r)}</td>
         <td><span class="stag">${r.sector}</span></td>
+        <td>${(r.sig==="BUY"||r.sig==="STRONG BUY")?`<button class="btn-trade" onclick="openTradeModal('${r.sym}')">+ Register</button>`:`<span style="color:var(--muted);font-size:10px">—</span>`}</td>
       </tr>`).join("")}</tbody>
     </table></div>
   </div>`;
@@ -897,7 +960,6 @@ function clearAll(){
   document.getElementById("prog").classList.remove("show");
   document.getElementById("m-lastscan").textContent="—";
   document.getElementById("m-lastscan-sub").textContent="—";
-  document.getElementById("saveBtn").style.display="none";
   document.getElementById("breadthBanner").classList.remove("show");
 }
 
