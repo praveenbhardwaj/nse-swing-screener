@@ -30,9 +30,74 @@ except ImportError:
     YF_OK = False
     print("[ERROR] yfinance missing — run: pip install yfinance pandas numpy")
 
+# ── SUPABASE (plain requests — avoids httpx HTTP/2 issues on Render) ──
+class _SBTable:
+    def __init__(self, base, headers, table):
+        self._base    = base
+        self._headers = headers
+        self._table   = table
+        self._filters = {}
+        self._upd     = None
+
+    def select(self, cols="*"):
+        self._cols = cols
+        return self
+
+    def eq(self, col, val):
+        self._filters[col] = f"eq.{val}"
+        return self
+
+    def order(self, col, desc=False):
+        self._order = f"{col}.{'desc' if desc else 'asc'}"
+        return self
+
+    def insert(self, rows):
+        self._rows = rows
+        return self
+
+    def update(self, data):
+        self._upd = data
+        return self
+
+    def execute(self):
+        url = f"{self._base}/rest/v1/{self._table}"
+        params = {k: v for k, v in self._filters.items()}
+        h = {**self._headers, "Prefer": "return=representation"}
+
+        if self._upd is not None:                          # PATCH
+            r = requests.patch(url, headers=h, params=params,
+                               json=self._upd, timeout=15)
+        elif hasattr(self, "_rows"):                       # POST insert
+            r = requests.post(url, headers=h, json=self._rows, timeout=15)
+        else:                                              # GET select
+            params["select"] = getattr(self, "_cols", "*")
+            if hasattr(self, "_order"):
+                params["order"] = self._order
+            r = requests.get(url, headers=h, params=params, timeout=15)
+
+        r.raise_for_status()
+        data = r.json() if r.content else []
+        return type("R", (), {"data": data if isinstance(data, list) else []})()
+
+
+class _SBClient:
+    def __init__(self, url, key):
+        self._base = url.rstrip("/")
+        self._h    = {"apikey": key, "Authorization": f"Bearer {key}",
+                      "Content-Type": "application/json"}
+    def table(self, name):
+        return _SBTable(self._base, self._h, name)
+
+
 try:
-    from supabase import create_client as _sb_create
-    _sb   = _sb_create(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
+    _sb   = _SBClient(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
+    # quick connectivity probe
+    _probe = requests.get(
+        f"{os.environ['SUPABASE_URL'].rstrip('/')}/rest/v1/trades?select=id&limit=1",
+        headers={"apikey": os.environ["SUPABASE_KEY"],
+                 "Authorization": f"Bearer {os.environ['SUPABASE_KEY']}"},
+        timeout=8)
+    _probe.raise_for_status()
     SB_OK = True
     print("[Supabase] Connected OK")
 except Exception as _sb_err:
