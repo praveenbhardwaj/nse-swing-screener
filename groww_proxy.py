@@ -1364,6 +1364,9 @@ def save_trades():
                 if auto_sync and not force_entry_update:
                     payload["entry_price"] = existing[0].get("entry_price")
                     payload["shares_20k"] = existing[0].get("shares_20k")
+                # If user explicitly updates entry, reset entry timestamp for outcome tracking.
+                if force_entry_update:
+                    payload["scanned_at"] = pd.Timestamp.now().isoformat()
                 _sb.table("trades").update(payload).eq("id", existing[0]["id"]).execute()
                 updated += 1
             else:
@@ -1403,7 +1406,8 @@ def check_outcomes():
         try:
             sym   = trade["symbol"]
             t1    = float(trade["target1"]); sl = float(trade["stop_loss"])
-            start = pd.Timestamp(trade.get("scanned_at", "")).normalize() + pd.Timedelta(days=1)
+            entry_ts = trade.get("entry_date") or trade.get("entered_at") or trade.get("scanned_at", "")
+            start = pd.Timestamp(entry_ts).normalize() + pd.Timedelta(days=1)
             today = pd.Timestamp.now().normalize()
             if start > today: return
             df = yf.Ticker(f"{sym}.NS").history(

@@ -15,10 +15,11 @@
   --green:#16a34a;--green-lt:#f0fdf4;--green-br:#bbf7d0;
   --red:#dc2626;--red-lt:#fef2f2;--red-br:#fecaca;
   --amber:#d97706;--amber-lt:#fffbeb;--amber-br:#fde68a;
-  --r:8px;--shadow:0 1px 3px rgba(0,0,0,.08),0 1px 2px rgba(0,0,0,.04);
+  --r:10px;--shadow:0 2px 8px rgba(15,23,42,.06),0 1px 2px rgba(15,23,42,.04);
+  --shadow-lg:0 10px 26px rgba(15,23,42,.08),0 2px 8px rgba(15,23,42,.05);
 }
 html{font-size:14px}
-body{background:var(--bg);color:var(--text);font-family:'Inter',sans-serif;-webkit-font-smoothing:antialiased}
+body{background:linear-gradient(180deg,#f8faff 0%,#f4f6fb 28%,#f5f6fa 100%);color:var(--text);font-family:'Inter',sans-serif;-webkit-font-smoothing:antialiased}
 .page{max-width:1280px;margin:0 auto;padding:0 20px 60px}
 
 /* NAV */
@@ -239,13 +240,16 @@ tbody tr{animation:fadeUp .18s ease both}
 .trade-modal-price{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--accent);font-weight:600;margin-left:auto}
 
 /* ACTIVE TRADES PANEL */
-.active-trades{background:var(--white);border:2px solid var(--accent-br);border-radius:var(--r);padding:14px 16px;margin-bottom:18px;box-shadow:var(--shadow);display:none}
+.active-trades{background:linear-gradient(180deg,#ffffff 0%,#fbfdff 100%);border:1px solid var(--accent-br);border-radius:12px;padding:14px 16px;margin-bottom:18px;box-shadow:var(--shadow-lg);display:none}
 .active-trades.show{display:block}
 .at-hdr{display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap}
 .at-ttl{font-size:13px;font-weight:700;color:var(--accent);flex:1}
 .at-count{font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:700;background:var(--accent-lt);color:var(--accent);border:1px solid var(--accent-br);padding:2px 8px;border-radius:20px}
+.at-live{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--green);background:var(--green-lt);border:1px solid var(--green-br);padding:2px 8px;border-radius:20px;display:inline-flex;align-items:center;gap:5px}
+.at-live-dot{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 0 0 rgba(22,163,74,.45);animation:pulse 1.6s infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(22,163,74,.45)}70%{box-shadow:0 0 0 8px rgba(22,163,74,0)}100%{box-shadow:0 0 0 0 rgba(22,163,74,0)}}
 .at-list{display:flex;flex-direction:column;gap:8px}
-.at-row{display:grid;grid-template-columns:minmax(120px,1fr) minmax(220px,2fr) minmax(210px,2fr) auto;align-items:center;gap:12px;padding:10px 12px;background:var(--bg);border-radius:6px;border:1px solid var(--border)}
+.at-row{display:grid;grid-template-columns:minmax(120px,1fr) minmax(220px,2fr) minmax(210px,2fr) auto;align-items:center;gap:12px;padding:11px 12px;background:#f8fbff;border-radius:8px;border:1px solid #dbe6fb}
 .at-sym{font-size:13px;font-weight:700}
 .at-sym-sub{font-size:10px;color:var(--muted)}
 .at-meta{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--sub);display:flex;flex-direction:column;gap:4px}
@@ -330,6 +334,7 @@ tbody tr{animation:fadeUp .18s ease both}
   <div class="at-hdr">
     <span class="at-ttl">⚡ Active Trades</span>
     <span class="at-count" id="activeTradeCount">0</span>
+    <span class="at-live"><span class="at-live-dot"></span>Live 10s</span>
     <span class="at-sym-sub" id="activeTradeUpdatedAt">Last updated —</span>
     <button class="btn btn-g" style="font-size:11px;padding:4px 10px;margin-left:auto" onclick="refreshActivePnL()">↻ Refresh P&L</button>
   </div>
@@ -579,6 +584,8 @@ let currentJobId=null,pollInterval=null,proxyOk=false;
 let universeData=[],sortKey="score",sortAsc=false;
 let historyData=[],histFiltered=[];
 let activeTradesCache=[];
+let activePnlInterval=null;
+let activePnlBusy=false;
 
 // ── INIT ──────────────────────────────────────────────────────
 window.addEventListener("load",async()=>{
@@ -594,6 +601,10 @@ window.addEventListener("load",async()=>{
   fetchMarketData();
   loadUniverse();
   loadActiveTrades();
+  document.addEventListener("visibilitychange",()=>{
+    if(document.hidden)stopActivePnlAutoRefresh();
+    else startActivePnlAutoRefresh();
+  });
 });
 
 // ── PROXY ─────────────────────────────────────────────────────
@@ -1070,6 +1081,7 @@ function switchTab(name){
   document.getElementById("tab-history").style.display=isSc?"none":"";
   document.getElementById("tabBtnScreener").classList.toggle("active",isSc);
   document.getElementById("tabBtnHistory").classList.toggle("active",!isSc);
+  if(isSc)startActivePnlAutoRefresh(); else stopActivePnlAutoRefresh();
   if(!isSc&&historyData.length===0)loadHistory();
 }
 
@@ -1247,12 +1259,13 @@ async function loadActiveTrades(){
     activeTradesCache=open;
     const panel=document.getElementById("activeTrades");
     const cnt=document.getElementById("activeTradeCount");
-    if(!open.length){panel.classList.remove("show");return;}
+    if(!open.length){panel.classList.remove("show");stopActivePnlAutoRefresh();return;}
     panel.classList.add("show");
     cnt.textContent=open.length;
     renderActiveTrades(open,{});
     document.getElementById("activeTradeUpdatedAt").textContent=`Last updated ${new Date().toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"})}`;
     await refreshActivePnL();
+    startActivePnlAutoRefresh();
   }catch(e){console.warn("[ActiveTrades]",e);}
 }
 
@@ -1262,6 +1275,7 @@ function renderActiveTrades(open,prices){
     const lp=prices[t.symbol]?.ltp;
     const entry=+(t.entry_price||0);
     const qty=+(t.shares_20k||0);
+    const entryDate=t.scanned_at?new Date(t.scanned_at).toLocaleDateString("en-IN",{day:"2-digit",month:"short",year:"numeric"}):"—";
     const pnl=lp&&entry?round2((lp-entry)*qty):null;
     const pnlPct=lp&&entry?round2(((lp-entry)/entry)*100):null;
     const pnlCls=pnl==null?"zero":pnl>0?"pos":pnl<0?"neg":"zero";
@@ -1275,6 +1289,7 @@ function renderActiveTrades(open,prices){
       <div class="at-meta">
         <div class="at-meta-line">
           <span class="at-chip">Entry ₹${entry.toLocaleString("en-IN",{maximumFractionDigits:2})}</span>
+          <span class="at-chip">Date ${entryDate}</span>
           <span class="at-chip">Qty ${qty||"—"}</span>
           <span class="at-chip open">Open</span>
         </div>
@@ -1296,9 +1311,11 @@ function renderActiveTrades(open,prices){
 }
 
 async function refreshActivePnL(){
+  if(activePnlBusy)return;
   try{
+    activePnlBusy=true;
     const open=[...activeTradesCache];
-    if(!open.length)return;
+    if(!open.length){stopActivePnlAutoRefresh();return;}
     const syms=open.map(t=>t.symbol).join(",");
     const lr=await fetch(`${PROXY}/ltp?symbols=${syms}`,{signal:AbortSignal.timeout(10000)});
     const ld=await lr.json();
@@ -1306,6 +1323,16 @@ async function refreshActivePnL(){
     renderActiveTrades(open,prices);
     document.getElementById("activeTradeUpdatedAt").textContent=`Last updated ${new Date().toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"})}`;
   }catch(e){console.warn("[RefreshPnL]",e);}
+  finally{activePnlBusy=false;}
+}
+
+function startActivePnlAutoRefresh(){
+  const activeTabVisible=document.getElementById("tab-screener").style.display!=="none";
+  if(activePnlInterval||!activeTradesCache.length||document.hidden||!activeTabVisible)return;
+  activePnlInterval=setInterval(refreshActivePnL,10000);
+}
+function stopActivePnlAutoRefresh(){
+  if(activePnlInterval){clearInterval(activePnlInterval);activePnlInterval=null;}
 }
 
 // ── HELPERS ───────────────────────────────────────────────────
