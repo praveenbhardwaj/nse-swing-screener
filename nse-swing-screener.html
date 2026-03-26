@@ -20,7 +20,37 @@
 }
 html{font-size:14px}
 body{background:linear-gradient(180deg,#f8faff 0%,#f4f6fb 28%,#f5f6fa 100%);color:var(--text);font-family:'Inter',sans-serif;-webkit-font-smoothing:antialiased}
-.page{max-width:1280px;margin:0 auto;padding:0 20px 60px}
+.page{max-width:1400px;margin:0 auto;padding:14px 20px 60px}
+.dashboard{display:grid;grid-template-columns:230px minmax(0,1fr);gap:18px}
+.sidebar{background:rgba(255,255,255,.78);border:1px solid #e3eaf6;border-radius:16px;padding:16px 12px;box-shadow:0 14px 28px rgba(15,23,42,.07);backdrop-filter:blur(8px);height:calc(100vh - 48px);position:sticky;top:14px}
+.side-brand{display:flex;align-items:center;gap:10px;padding:6px 8px 16px;border-bottom:1px solid var(--border);margin-bottom:14px}
+.side-brand-mark{width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg,#4f46e5,#4338ca);display:grid;place-items:center;color:#fff;font-size:14px}
+.side-brand-name{font-size:16px;font-weight:700;line-height:1.1}
+.side-brand-sub{font-size:10px;color:var(--muted);font-weight:600;letter-spacing:.8px;text-transform:uppercase}
+.side-nav{display:flex;flex-direction:column;gap:4px}
+.side-btn{border:none;background:transparent;padding:9px 10px;border-radius:10px;font-size:12px;font-weight:600;color:var(--sub);text-align:left;cursor:pointer;transition:all .15s}
+.side-btn:hover{background:#eef2ff;color:#1e1b4b}
+.side-btn.active{background:#eef2ff;color:#312e81;box-shadow:inset 0 0 0 1px #c7d2fe}
+.side-footer{margin-top:auto;padding:12px 8px 2px;font-size:11px;color:var(--muted)}
+.main{min-width:0}
+.topbar{display:flex;align-items:center;gap:10px;justify-content:space-between;background:rgba(255,255,255,.82);border:1px solid #e6ebf5;border-radius:14px;padding:12px 14px;box-shadow:0 10px 24px rgba(15,23,42,.06)}
+.search{width:min(360px,100%);background:#f8fafc;border:1px solid #dbe3f0;border-radius:10px;padding:8px 12px;font-size:12px;color:var(--sub);outline:none}
+.top-actions{display:flex;align-items:center;gap:8px}
+.view{display:none}
+.view.active{display:block}
+.kpi-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:14px 0}
+.kpi-card{background:var(--white);border:1px solid var(--border);border-radius:12px;padding:12px 14px;box-shadow:var(--shadow)}
+.kpi-lbl{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px}
+.kpi-val{font-size:24px;font-weight:700;letter-spacing:-.5px;margin-top:4px}
+.kpi-sub{font-size:11px;color:var(--sub);margin-top:4px}
+.module-grid{display:grid;grid-template-columns:2fr 1fr;gap:12px;margin-bottom:12px}
+.mini-note{font-size:11px;color:var(--sub);margin-top:5px}
+.alloc-list{margin-top:10px;display:flex;flex-direction:column;gap:6px}
+.alloc-row{display:flex;align-items:center;justify-content:space-between;font-size:12px}
+.alloc-bar{height:6px;background:#e2e8f0;border-radius:999px;overflow:hidden;margin-top:4px}
+.alloc-fill{height:100%;background:linear-gradient(135deg,#4f46e5,#2563eb)}
+.report-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+@media(max-width:1100px){.dashboard{grid-template-columns:1fr}.sidebar{position:relative;height:auto}.module-grid{grid-template-columns:1fr}.kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.report-grid{grid-template-columns:1fr}}
 
 /* NAV */
 nav{display:flex;align-items:center;justify-content:space-between;padding:16px 0 14px;border-bottom:1px solid var(--border);margin-bottom:20px;gap:12px;flex-wrap:wrap}
@@ -499,23 +529,65 @@ tbody tr:hover{background:#eef4ff}
 <div class="toast hidden" id="toast"></div>
 
 <div class="page">
-
-<!-- NAV -->
-<nav>
-  <div class="brand">
-    <div class="brand-ico">📊</div>
-    <div class="brand-txt">NSE <b>Swing</b>Screen</div>
-  </div>
-  <div class="nav-right">
-    <span class="nav-date" id="navDate">—</span>
-    <div class="tab-nav">
-      <button class="tab-btn active" id="tabBtnScreener" onclick="switchTab('screener')">Screener</button>
-      <button class="tab-btn" id="tabBtnHistory" onclick="switchTab('history')">History</button>
+<div class="dashboard">
+<aside class="sidebar">
+  <div class="side-brand">
+    <div class="side-brand-mark">SV</div>
+    <div>
+      <div class="side-brand-name">Stockvest</div>
+      <div class="side-brand-sub">Precision Curator</div>
     </div>
   </div>
-</nav>
+  <div class="side-nav">
+    <button class="side-btn active" id="tabBtnOverview" onclick="switchTab('overview')">Overview</button>
+    <button class="side-btn" id="tabBtnPortfolio" onclick="switchTab('portfolio')">Portfolio</button>
+    <button class="side-btn" id="tabBtnWatchlists" onclick="switchTab('watchlists')">Watchlists</button>
+    <button class="side-btn" id="tabBtnAnalytics" onclick="switchTab('analytics')">Analytics</button>
+    <button class="side-btn" id="tabBtnReports" onclick="switchTab('reports')">Reports</button>
+    <button class="side-btn" id="tabBtnHistory" onclick="switchTab('history')">History</button>
+  </div>
+  <div class="side-footer">Research dashboard · live market sync</div>
+</aside>
+<main class="main">
+  <div class="topbar">
+    <input class="search" placeholder="Search portfolio..." />
+    <div class="top-actions">
+      <span class="nav-date" id="navDate">—</span>
+      <button class="btn btn-g" onclick="fetchMarketData()">Refresh</button>
+    </div>
+  </div>
 
-<!-- ═══════════════ SCREENER TAB ═══════════════ -->
+<!-- ═══════════════ OVERVIEW TAB ═══════════════ -->
+<div id="tab-overview" class="view active">
+  <div class="kpi-grid" id="overviewKpis">
+    <div class="kpi-card"><div class="kpi-lbl">Total Portfolio Value</div><div class="kpi-val">₹0</div><div class="kpi-sub">Loading summary...</div></div>
+  </div>
+  <div class="module-grid">
+    <div class="tcard" style="padding:14px">
+      <div class="tcount">Live Updates</div>
+      <div class="mini-note" id="overviewInsight">Syncing active positions and performance metrics.</div>
+      <div id="overviewBars" style="height:170px;display:flex;align-items:flex-end;gap:8px;margin-top:14px"></div>
+    </div>
+    <div class="tcard" style="padding:14px">
+      <div class="tcount">Sector Allocation</div>
+      <div class="alloc-list" id="allocationList"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ PORTFOLIO TAB ═══════════════ -->
+<div id="tab-portfolio" class="view">
+  <div class="tcard" style="padding:14px;margin-top:14px">
+    <div class="tbar" style="padding:0 0 10px 0;border:none">
+      <div class="tcount">Active Holdings</div>
+      <button class="btn btn-g" onclick="loadPortfolioSummary()">↻ Refresh Holdings</button>
+    </div>
+    <div id="portfolioTableWrap"></div>
+  </div>
+</div>
+
+<!-- ═══════════════ WATCHLISTS TAB ═══════════════ -->
+<div id="tab-watchlists" class="view">
 <div id="tab-screener">
 
 <!-- ACTIVE TRADES PANEL -->
@@ -719,9 +791,25 @@ tbody tr:hover{background:#eef4ff}
 <div class="disc">⚠ EDUCATIONAL & RESEARCH PURPOSES ONLY — Not SEBI-registered advice. Data from Yahoo Finance. Validate independently. Capital at risk. Always use stop losses.</div>
 
 </div><!-- end tab-screener -->
+</div>
+
+<!-- ═══════════════ ANALYTICS TAB ═══════════════ -->
+<div id="tab-analytics" class="view">
+  <div class="kpi-grid" id="analyticsKpis"></div>
+  <div class="module-grid">
+    <div class="tcard" style="padding:14px">
+      <div class="tcount">Signal Distribution</div>
+      <div id="signalMix" class="mini-note">Run screener or refresh data to view distribution.</div>
+    </div>
+    <div class="tcard" style="padding:14px">
+      <div class="tcount">Risk Snapshot</div>
+      <div id="riskMix" class="mini-note">Risk profile will appear after data sync.</div>
+    </div>
+  </div>
+</div>
 
 <!-- ═══════════════ HISTORY TAB ═══════════════ -->
-<div id="tab-history" style="display:none">
+<div id="tab-history" class="view">
   <div class="cbar">
     <span class="clbl">Signal</span>
     <select id="hSigF" onchange="renderHistory()">
@@ -751,6 +839,21 @@ tbody tr:hover{background:#eef4ff}
   </div>
 </div>
 
+<!-- ═══════════════ REPORTS TAB ═══════════════ -->
+<div id="tab-reports" class="view">
+  <div class="tcard" style="padding:14px;margin-top:14px">
+    <div class="tcount">Reports</div>
+    <div class="mini-note">Export and snapshot modules for periodic review.</div>
+    <div class="report-grid" style="margin-top:12px">
+      <div class="kpi-card"><div class="kpi-lbl">Monthly Snapshot</div><div class="kpi-sub" id="reportSnapshot">Generate summary from current trade history.</div></div>
+      <div class="kpi-card"><div class="kpi-lbl">Open Positions</div><div class="kpi-val" id="reportOpenCount">0</div><div class="kpi-sub">Live in portfolio</div></div>
+      <div class="kpi-card"><div class="kpi-lbl">Actions</div><button class="btn btn-p" onclick="loadHistory()">Refresh History</button></div>
+    </div>
+  </div>
+</div>
+
+</main>
+</div>
 </div><!-- end .page -->
 
 <script>
@@ -776,6 +879,7 @@ let historyData=[],histFiltered=[];
 let activeTradesCache=[];
 let activePnlInterval=null;
 let activePnlBusy=false;
+let portfolioSummary={summary:null,allocation:[],holdings:[]};
 
 // ── INIT ──────────────────────────────────────────────────────
 window.addEventListener("load",async()=>{
@@ -788,9 +892,11 @@ window.addEventListener("load",async()=>{
   const credsSet=sessionStorage.getItem("groww_creds_set")==="1";
   if(!credsSet){showCredentialModal();return;}
   await checkProxy();
+  switchTab("overview");
   fetchMarketData();
   loadUniverse();
   loadActiveTrades();
+  loadPortfolioSummary();
   document.addEventListener("visibilitychange",()=>{
     if(document.hidden)stopActivePnlAutoRefresh();
     else startActivePnlAutoRefresh();
@@ -1264,15 +1370,105 @@ async function submitCredentials(){
   finally{btn.disabled=false;btn.textContent="Connect to Groww";}
 }
 
+async function loadPortfolioSummary(){
+  try{
+    const r=await fetch(`${PROXY}/portfolio-summary`,{signal:AbortSignal.timeout(12000)});
+    const d=await r.json();
+    if(!d.ok)return;
+    portfolioSummary=d;
+    renderOverview();
+    renderPortfolioHoldings();
+    renderAnalytics();
+    renderReports();
+  }catch(e){
+    console.warn("[PortfolioSummary]",e);
+  }
+}
+
+function money(v){
+  return `₹${Number(v||0).toLocaleString("en-IN",{maximumFractionDigits:2})}`;
+}
+
+function renderOverview(){
+  const s=portfolioSummary.summary||{};
+  const kpis=document.getElementById("overviewKpis");
+  const pnlCls=(s.pnl_total||0)>=0?"var(--green)":"var(--red)";
+  kpis.innerHTML=`
+    <div class="kpi-card"><div class="kpi-lbl">Total Portfolio Value</div><div class="kpi-val">${money(s.portfolio_value)}</div><div class="kpi-sub">Invested ${money(s.invested_cost)}</div></div>
+    <div class="kpi-card"><div class="kpi-lbl">Today's P&L</div><div class="kpi-val" style="color:${pnlCls}">${money(s.pnl_total)}</div><div class="kpi-sub">${(s.pnl_pct_total||0)>0?"+":""}${Number(s.pnl_pct_total||0).toFixed(2)}% vs cost</div></div>
+    <div class="kpi-card"><div class="kpi-lbl">Open Positions</div><div class="kpi-val">${s.open_positions||0}</div><div class="kpi-sub">${s.closed_positions||0} closed in history</div></div>
+    <div class="kpi-card"><div class="kpi-lbl">Win Rate</div><div class="kpi-val">${Number(s.win_rate||0).toFixed(1)}%</div><div class="kpi-sub">${s.wins||0} wins / ${s.losses||0} losses</div></div>
+  `;
+  const insight=document.getElementById("overviewInsight");
+  insight.textContent=(s.open_positions||0)>0
+    ?`You have ${s.open_positions} active positions. Keep exposure balanced across sectors.`
+    :"No active positions yet. Run screener and register trades to build portfolio.";
+  const bars=document.getElementById("overviewBars");
+  const pts=(portfolioSummary.holdings||[]).slice(0,10).map((h)=>Math.max(8,Math.min(140,Math.abs(h.pnl_pct||0)*5+16)));
+  bars.innerHTML=pts.length?pts.map((h,i)=>`<div style="flex:1;height:${h}px;background:${i===pts.length-1?'#4338ca':'#c7d2fe'};border-radius:8px 8px 2px 2px"></div>`).join(""):`<div class="mini-note">No performance bars yet.</div>`;
+  const alloc=document.getElementById("allocationList");
+  alloc.innerHTML=(portfolioSummary.allocation||[]).slice(0,5).map(a=>`
+    <div>
+      <div class="alloc-row"><span>${a.sector}</span><strong>${a.weight}%</strong></div>
+      <div class="alloc-bar"><div class="alloc-fill" style="width:${a.weight}%"></div></div>
+    </div>`).join("") || `<div class="mini-note">Allocation will appear after open positions are available.</div>`;
+}
+
+function renderPortfolioHoldings(){
+  const wrap=document.getElementById("portfolioTableWrap");
+  const rows=portfolioSummary.holdings||[];
+  document.getElementById("reportOpenCount").textContent=rows.length;
+  if(!rows.length){
+    wrap.innerHTML=`<div class="empty"><div class="empty-ico">📭</div><div>No holdings yet.</div></div>`;
+    return;
+  }
+  wrap.innerHTML=`<div class="tscroll"><table>
+    <thead><tr><th>Symbol</th><th>Quantity</th><th>Avg Price</th><th>Market Price</th><th>Position Value</th><th>P&L</th><th>Signal</th></tr></thead>
+    <tbody>${rows.map(r=>`<tr>
+      <td><div class="sym-name">${r.symbol}</div><div class="sym-sub">${r.name||r.sector||""}</div></td>
+      <td>${Number(r.qty||0).toLocaleString("en-IN")}</td>
+      <td>${money(r.avg_price)}</td>
+      <td>${money(r.market_price)}</td>
+      <td>${money(r.position_value)}</td>
+      <td style="color:${r.pnl>=0?'var(--green)':'var(--red)'}">${money(r.pnl)} (${r.pnl_pct>0?"+":""}${Number(r.pnl_pct||0).toFixed(2)}%)</td>
+      <td>${badge(r.signal||"WATCH")}</td>
+    </tr>`).join("")}</tbody>
+  </table></div>`;
+}
+
+function renderAnalytics(){
+  const a=document.getElementById("analyticsKpis");
+  const holdings=portfolioSummary.holdings||[];
+  const pos=holdings.filter(h=>h.pnl>0).length;
+  const neg=holdings.filter(h=>h.pnl<0).length;
+  const mix={sb:allResults.filter(r=>r.sig==="STRONG BUY").length,b:allResults.filter(r=>r.sig==="BUY").length,w:allResults.filter(r=>r.sig==="WATCH").length};
+  a.innerHTML=`
+    <div class="kpi-card"><div class="kpi-lbl">Positive Holdings</div><div class="kpi-val" style="color:var(--green)">${pos}</div></div>
+    <div class="kpi-card"><div class="kpi-lbl">Negative Holdings</div><div class="kpi-val" style="color:var(--red)">${neg}</div></div>
+    <div class="kpi-card"><div class="kpi-lbl">Scans Saved</div><div class="kpi-val">${historyData.length}</div></div>
+    <div class="kpi-card"><div class="kpi-lbl">Active Signals</div><div class="kpi-val">${mix.sb+mix.b+mix.w}</div></div>`;
+  document.getElementById("signalMix").textContent=`Strong Buy ${mix.sb} · Buy ${mix.b} · Watch ${mix.w}`;
+  document.getElementById("riskMix").textContent=`Risk ratio (negative/total): ${holdings.length?Math.round((neg/holdings.length)*100):0}%`;
+}
+
+function renderReports(){
+  const s=portfolioSummary.summary||{};
+  document.getElementById("reportSnapshot").textContent=
+    `Portfolio ${money(s.portfolio_value)} · P&L ${money(s.pnl_total)} · Win rate ${Number(s.win_rate||0).toFixed(1)}%`;
+}
+
 // ── TABS ──────────────────────────────────────────────────────
 function switchTab(name){
-  const isSc=name==="screener";
-  document.getElementById("tab-screener").style.display=isSc?"":"none";
-  document.getElementById("tab-history").style.display=isSc?"none":"";
-  document.getElementById("tabBtnScreener").classList.toggle("active",isSc);
-  document.getElementById("tabBtnHistory").classList.toggle("active",!isSc);
-  if(isSc)startActivePnlAutoRefresh(); else stopActivePnlAutoRefresh();
-  if(!isSc&&historyData.length===0)loadHistory();
+  const tabs=["overview","portfolio","watchlists","analytics","reports","history"];
+  tabs.forEach(tab=>{
+    const el=document.getElementById(`tab-${tab}`);
+    if(el)el.classList.toggle("active",tab===name);
+    const btn=document.getElementById(`tabBtn${tab[0].toUpperCase()+tab.slice(1)}`);
+    if(btn)btn.classList.toggle("active",tab===name);
+  });
+  if(name==="watchlists")startActivePnlAutoRefresh(); else stopActivePnlAutoRefresh();
+  if(name==="history"&&historyData.length===0)loadHistory();
+  if(["overview","portfolio","analytics","reports"].includes(name))loadPortfolioSummary();
 }
 
 // ── SAVE TRADES ───────────────────────────────────────────────
@@ -1299,6 +1495,8 @@ async function loadHistory(){
     hSecF.innerHTML='<option value="all">All Sectors</option>';
     sectors.forEach(s=>{const o=document.createElement("option");o.value=s;o.textContent=s;hSecF.appendChild(o);});
     renderHistory();
+    renderAnalytics();
+    renderReports();
   }catch(e){showToast("Network error loading history.","err");}
 }
 
@@ -1432,6 +1630,7 @@ async function submitTrade(){
       closeTradeModal();
       showToast(`Trade ${action}: ${_tradeTarget?.sym||""}`,d.ok?"ok":"info");
       loadActiveTrades();
+      loadPortfolioSummary();
     }
     else errEl.textContent=d.error||"Save failed — is Supabase configured?";
   }catch(e){errEl.textContent="Network error.";}
@@ -1456,6 +1655,8 @@ async function loadActiveTrades(){
     document.getElementById("activeTradeUpdatedAt").textContent=`Last updated ${new Date().toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"})}`;
     await refreshActivePnL();
     startActivePnlAutoRefresh();
+    renderOverview();
+    renderPortfolioHoldings();
   }catch(e){console.warn("[ActiveTrades]",e);}
 }
 
@@ -1528,7 +1729,7 @@ async function refreshActivePnL(){
 }
 
 function startActivePnlAutoRefresh(){
-  const activeTabVisible=document.getElementById("tab-screener").style.display!=="none";
+  const activeTabVisible=document.getElementById("tab-watchlists")?.classList.contains("active");
   if(activePnlInterval||!activeTradesCache.length||document.hidden||!activeTabVisible)return;
   activePnlInterval=setInterval(refreshActivePnL,10000);
 }

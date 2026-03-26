@@ -1191,6 +1191,56 @@ def fetch_market_data():
     except Exception: pass
     return result
 
+def _fetch_ltp_batch(symbols):
+    if not symbols:
+        return {}, []
+    prices, failed = {}, []
+    for sym in symbols:
+        got = False
+        try:
+            r = requests.get(
+                f"{BASE_URL}/live-data/quote",
+                params={"exchange": "NSE", "segment": "CASH", "trading_symbol": sym},
+                headers=groww_headers(),
+                timeout=5,
+            )
+            d = r.json()
+            if d.get("status") == "SUCCESS":
+                p = d["payload"]
+                ltp = p.get("last_price") or p.get("ltp")
+                if ltp:
+                    prices[sym] = {
+                        "ltp": float(ltp),
+                        "change": round(p.get("day_change") or 0, 2),
+                        "change_pct": round(p.get("day_change_perc") or 0, 2),
+                        "source": "groww",
+                    }
+                    got = True
+        except Exception:
+            pass
+        if not got and YF_OK:
+            try:
+                hist = yf.Ticker(f"{sym}.NS").history(period="5d", interval="1d", auto_adjust=True)
+                if hist is not None and not hist.empty:
+                    closes = hist["Close"].dropna().values.astype(float)
+                    if len(closes):
+                        ltp = float(closes[-1])
+                        prev = float(closes[-2]) if len(closes) > 1 else ltp
+                        chg = ltp - prev
+                        chg_pct = (chg / prev * 100) if prev else 0.0
+                        prices[sym] = {
+                            "ltp": round(ltp, 2),
+                            "change": round(chg, 2),
+                            "change_pct": round(chg_pct, 2),
+                            "source": "yfinance",
+                        }
+                        got = True
+            except Exception:
+                pass
+        if not got:
+            failed.append(sym)
+    return prices, failed
+
 
 # ══════════════════════════════════════════════════════════════════════
 # FLASK ROUTES
@@ -1215,51 +1265,7 @@ def regime_route():
 def get_ltp():
     symbols = [s.strip() for s in request.args.get("symbols", "").split(",") if s.strip()]
     if not symbols: return jsonify({"error": "No symbols"}), 400
-    results, failed = {}, []
-
-    def _yf_ltp(sym):
-        if not YF_OK:
-            return None
-        try:
-            hist = yf.Ticker(f"{sym}.NS").history(period="5d", interval="1d", auto_adjust=True)
-            if hist is None or hist.empty:
-                return None
-            closes = hist["Close"].dropna().values.astype(float)
-            if len(closes) == 0:
-                return None
-            ltp = float(closes[-1])
-            prev = float(closes[-2]) if len(closes) > 1 else ltp
-            chg = ltp - prev
-            chg_pct = (chg / prev * 100) if prev else 0.0
-            return {"ltp": round(ltp, 2), "change": round(chg, 2),
-                    "change_pct": round(chg_pct, 2), "source": "yfinance"}
-        except Exception:
-            return None
-
-    for sym in symbols:
-        got = False
-        try:
-            r = requests.get(f"{BASE_URL}/live-data/quote",
-                             params={"exchange": "NSE", "segment": "CASH", "trading_symbol": sym},
-                             headers=groww_headers(), timeout=5)
-            d = r.json()
-            if d.get("status") == "SUCCESS":
-                p = d["payload"]
-                results[sym] = {"ltp": p.get("last_price") or p.get("ltp"),
-                                "change": round(p.get("day_change") or 0, 2),
-                                "change_pct": round(p.get("day_change_perc") or 0, 2),
-                                "source": "groww"}
-                got = bool(results[sym].get("ltp"))
-        except Exception as e:
-            print(f"[LTP] {sym}: {e}")
-
-        if not got:
-            fb = _yf_ltp(sym)
-            if fb is not None:
-                results[sym] = fb
-            else:
-                failed.append(sym)
-
+    results, failed = _fetch_ltp_batch(symbols)
     return jsonify({"prices": results, "failed": failed})
 
 @app.route("/quote/<symbol>")
@@ -1415,6 +1421,80 @@ def get_trades():
     try:
         resp = _sb.table("trades").select("*").order("scanned_at", desc=True).execute()
         return jsonify({"ok": True, "trades": resp.data})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/portfolio-summary")
+def portfolio_summary():
+    if not SB_OK:
+        return jsonify({"ok": False, "error": "Supabase not configured"}), 503
+    try:
+        resp = _sb.table("trades").select("*").order("scanned_at", desc=True).execute()
+        trades = resp.data or []
+        open_trades = [t for t in trades if t.get("status") == "open"]
+        closed_trades = [t for t in trades if t.get("status") != "open"]
+
+        symbols = sorted({t.get("symbol") for t in open_trades if t.get("symbol")})
+        prices, _ = _fetch_ltp_batch(symbols)
+
+        total_value = 0.0
+        total_cost = 0.0
+        holdings = []
+        sector_cost = {}
+        for t in open_trades:
+            sym = t.get("symbol")
+            qty = float(t.get("shares_20k") or 0)
+            entry = float(t.get("entry_price") or 0)
+            ltp = float((prices.get(sym, {}) or {}).get("ltp") or entry or 0)
+            position_cost = entry * qty
+            position_value = ltp * qty
+            pnl = position_value - position_cost
+            pnl_pct = (pnl / position_cost * 100) if position_cost > 0 else 0
+            total_value += position_value
+            total_cost += position_cost
+            sector = t.get("sector") or "Unknown"
+            sector_cost[sector] = sector_cost.get(sector, 0.0) + position_cost
+            holdings.append({
+                "symbol": sym,
+                "name": t.get("name"),
+                "sector": sector,
+                "qty": qty,
+                "avg_price": round(entry, 2),
+                "market_price": round(ltp, 2),
+                "position_value": round(position_value, 2),
+                "pnl": round(pnl, 2),
+                "pnl_pct": round(pnl_pct, 2),
+                "signal": t.get("signal"),
+            })
+
+        pnl_total = total_value - total_cost
+        pnl_pct_total = (pnl_total / total_cost * 100) if total_cost > 0 else 0
+        allocation = []
+        for sector, cost in sorted(sector_cost.items(), key=lambda x: x[1], reverse=True):
+            weight = (cost / total_cost * 100) if total_cost > 0 else 0
+            allocation.append({"sector": sector, "weight": round(weight, 1)})
+
+        wins = len([t for t in closed_trades if t.get("status") == "target_hit"])
+        losses = len([t for t in closed_trades if t.get("status") == "sl_hit"])
+        closed_count = len(closed_trades)
+        win_rate = round((wins / closed_count * 100), 1) if closed_count else 0.0
+
+        return jsonify({
+            "ok": True,
+            "summary": {
+                "open_positions": len(open_trades),
+                "closed_positions": closed_count,
+                "portfolio_value": round(total_value, 2),
+                "invested_cost": round(total_cost, 2),
+                "pnl_total": round(pnl_total, 2),
+                "pnl_pct_total": round(pnl_pct_total, 2),
+                "win_rate": win_rate,
+                "wins": wins,
+                "losses": losses,
+            },
+            "allocation": allocation,
+            "holdings": holdings,
+        })
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
