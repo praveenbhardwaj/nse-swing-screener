@@ -245,13 +245,18 @@ tbody tr{animation:fadeUp .18s ease both}
 .at-ttl{font-size:13px;font-weight:700;color:var(--accent);flex:1}
 .at-count{font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:700;background:var(--accent-lt);color:var(--accent);border:1px solid var(--accent-br);padding:2px 8px;border-radius:20px}
 .at-list{display:flex;flex-direction:column;gap:8px}
-.at-row{display:grid;grid-template-columns:90px 110px 1fr auto;align-items:center;gap:10px;padding:10px 12px;background:var(--bg);border-radius:6px;border:1px solid var(--border)}
+.at-row{display:grid;grid-template-columns:minmax(120px,1fr) minmax(220px,2fr) minmax(210px,2fr) auto;align-items:center;gap:12px;padding:10px 12px;background:var(--bg);border-radius:6px;border:1px solid var(--border)}
 .at-sym{font-size:13px;font-weight:700}
 .at-sym-sub{font-size:10px;color:var(--muted)}
-.at-meta{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--sub);display:flex;gap:12px;flex-wrap:wrap}
-.at-pnl{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;text-align:right;white-space:nowrap}
+.at-meta{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--sub);display:flex;flex-direction:column;gap:4px}
+.at-meta-line{display:flex;gap:10px;flex-wrap:wrap}
+.at-chip{font-family:'JetBrains Mono',monospace;font-size:10px;padding:2px 6px;border-radius:4px;background:var(--white);border:1px solid var(--border);color:var(--sub)}
+.at-chip.open{background:var(--accent-lt);border-color:var(--accent-br);color:var(--accent)}
+.at-actions{display:flex;gap:6px;justify-content:flex-end}
+.at-pnl{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;text-align:right;white-space:nowrap;display:flex;flex-direction:column;gap:2px}
+.at-pnl-sub{font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:500}
 .at-pnl.pos{color:var(--green)}.at-pnl.neg{color:var(--red)}.at-pnl.zero{color:var(--muted)}
-@media(max-width:600px){.at-row{grid-template-columns:1fr 1fr;}}
+@media(max-width:900px){.at-row{grid-template-columns:1fr;}.at-actions{justify-content:flex-start;}.at-pnl{text-align:left}}
 </style>
 </head>
 <body>
@@ -325,6 +330,7 @@ tbody tr{animation:fadeUp .18s ease both}
   <div class="at-hdr">
     <span class="at-ttl">⚡ Active Trades</span>
     <span class="at-count" id="activeTradeCount">0</span>
+    <span class="at-sym-sub" id="activeTradeUpdatedAt">Last updated —</span>
     <button class="btn btn-g" style="font-size:11px;padding:4px 10px;margin-left:auto" onclick="refreshActivePnL()">↻ Refresh P&L</button>
   </div>
   <div class="at-list" id="activeTradeList"></div>
@@ -572,6 +578,7 @@ let allResults=[],rejectedResults=[],filteredResults=[];
 let currentJobId=null,pollInterval=null,proxyOk=false;
 let universeData=[],sortKey="score",sortAsc=false;
 let historyData=[],histFiltered=[];
+let activeTradesCache=[];
 
 // ── INIT ──────────────────────────────────────────────────────
 window.addEventListener("load",async()=>{
@@ -772,10 +779,29 @@ async function finaliseResults(){
   document.getElementById("m-lastscan-sub").textContent=new Date().toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"});
   renderTable(applyClientFilters(allResults),false);
   renderRejected(rejectedResults);
+  await autoSyncBuySignalsToOngoingTrades();
   const sectors=[...new Set(allResults.map(r=>r.sector))].filter(s=>s&&s!=="Unknown").sort();
   const secF=document.getElementById("secF");const cur=secF.value;
   secF.innerHTML='<option value="all">All Sectors</option>';
   sectors.forEach(s=>{const o=document.createElement("option");o.value=s;o.textContent=s;if(s===cur)o.selected=true;secF.appendChild(o);});
+}
+
+async function autoSyncBuySignalsToOngoingTrades(){
+  const buyable=allResults.filter(r=>r.sig==="BUY"||r.sig==="STRONG BUY");
+  if(!buyable.length){await loadActiveTrades();return;}
+  try{
+    const r=await fetch(`${PROXY}/save-trades`,{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(buyable.map(x=>({...x,auto_sync:true})))
+    });
+    const d=await r.json();
+    if(d.ok){
+      const added=d.inserted||0,updated=d.updated||0;
+      if(added+updated>0)showToast(`Ongoing trades synced · +${added} new, ${updated} updated`,"info");
+    }
+  }catch(e){console.warn("[AutoSyncTrades]",e);}
+  await loadActiveTrades();
 }
 
 // ── CLIENT FILTERS ────────────────────────────────────────────
@@ -1144,24 +1170,42 @@ async function checkOutcomes(){
 
 // ── TRADE MODAL ───────────────────────────────────────────────
 let _tradeTarget=null;
-function openTradeModal(sym){
-  const r=allResults.find(x=>x.sym===sym);
+let _tradeMode="create";
+function openTradeModal(sym,fromActive=false){
+  const r=fromActive?activeTradesCache.find(x=>x.symbol===sym):allResults.find(x=>x.sym===sym);
   if(!r)return;
-  _tradeTarget=r;
-  document.getElementById("tradeModalSym").textContent=r.sym;
-  document.getElementById("tradeModalName").textContent=r.name||"";
-  document.getElementById("tradeModalBadge").innerHTML=badge(r.sig);
-  const info=r.buy_range_low?`Buy ₹${r.buy_range_low}–₹${r.buy_range_high} · T1 ₹${r.t1||"—"} · SL ₹${r.sl||"—"}`:
-             `Price ₹${r.price}`;
+  _tradeMode=fromActive?"edit":"create";
+  _tradeTarget=fromActive?{
+    ...r,
+    sym:r.symbol,
+    sig:r.signal||"BUY",
+    price:+(r.entry_price||0),
+    t1:+(r.target1||0),
+    sl:+(r.stop_loss||0),
+    buy_range_low:+(r.buy_range_low||0),
+    buy_range_high:+(r.buy_range_high||0),
+    shares_20k:+(r.shares_20k||0),
+  }:r;
+  document.getElementById("tradeModalTitle").textContent=fromActive?"Edit Ongoing Trade":"Register Trade";
+  document.getElementById("tradeSubmitBtn").textContent=fromActive?"✓ Update Trade":"✓ Register Trade";
+  document.getElementById("tradeModalSym").textContent=_tradeTarget.sym;
+  document.getElementById("tradeModalName").textContent=_tradeTarget.name||"";
+  document.getElementById("tradeModalBadge").innerHTML=badge(_tradeTarget.sig);
+  const info=_tradeTarget.buy_range_low?`Buy ₹${_tradeTarget.buy_range_low}–₹${_tradeTarget.buy_range_high} · T1 ₹${_tradeTarget.t1||"—"} · SL ₹${_tradeTarget.sl||"—"}`:
+             `Price ₹${_tradeTarget.price}`;
   document.getElementById("tradeModalInfo").textContent=info;
-  document.getElementById("tradeBuyPrice").value=r.price||"";
-  document.getElementById("tradeQty").value=r.shares_20k||Math.floor(20000/(r.price||1));
+  document.getElementById("tradeBuyPrice").value=_tradeTarget.price||"";
+  document.getElementById("tradeQty").value=_tradeTarget.shares_20k||Math.floor(20000/(_tradeTarget.price||1));
   document.getElementById("tradeErr").textContent="";
   document.getElementById("tradeModal").style.display="flex";
 }
+function openTradeEditModal(sym){openTradeModal(sym,true);}
 function closeTradeModal(){
   document.getElementById("tradeModal").style.display="none";
+  document.getElementById("tradeModalTitle").textContent="Register Trade";
+  document.getElementById("tradeSubmitBtn").textContent="✓ Register Trade";
   _tradeTarget=null;
+  _tradeMode="create";
 }
 async function submitTrade(){
   if(!_tradeTarget)return;
@@ -1172,7 +1216,7 @@ async function submitTrade(){
   if(!qty||qty<=0){errEl.textContent="Enter a valid quantity.";return;}
   const btn=document.getElementById("tradeSubmitBtn");
   btn.disabled=true;btn.textContent="Saving…";errEl.textContent="";
-  const row={..._tradeTarget,price:buyPrice,shares_20k:qty,
+  const row={..._tradeTarget,price:buyPrice,shares_20k:qty,force_entry_update:true,
     buy_range_low:_tradeTarget.buy_range_low||round2(buyPrice*0.99),
     buy_range_high:_tradeTarget.buy_range_high||round2(buyPrice*1.01),
     t1:_tradeTarget.t1||round2(buyPrice*1.05),
@@ -1181,7 +1225,12 @@ async function submitTrade(){
   try{
     const r=await fetch(`${PROXY}/save-trades`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify([row])});
     const d=await r.json();
-    if(d.ok){closeTradeModal();showToast(`Trade registered: ${_tradeTarget?.sym||""}${d.saved?" (saved to DB)":""}`,d.ok?"ok":"info");loadActiveTrades();}
+    if(d.ok){
+      const action=_tradeMode==="edit"?"updated":"registered";
+      closeTradeModal();
+      showToast(`Trade ${action}: ${_tradeTarget?.sym||""}`,d.ok?"ok":"info");
+      loadActiveTrades();
+    }
     else errEl.textContent=d.error||"Save failed — is Supabase configured?";
   }catch(e){errEl.textContent="Network error.";}
   finally{btn.disabled=false;btn.textContent="✓ Register Trade";}
@@ -1195,56 +1244,67 @@ async function loadActiveTrades(){
     const d=await r.json();
     if(!d.ok)return;
     const open=(d.trades||[]).filter(t=>t.status==="open");
+    activeTradesCache=open;
     const panel=document.getElementById("activeTrades");
-    const list=document.getElementById("activeTradeList");
     const cnt=document.getElementById("activeTradeCount");
     if(!open.length){panel.classList.remove("show");return;}
     panel.classList.add("show");
     cnt.textContent=open.length;
-    list.innerHTML=open.map(t=>`<div class="at-row">
-      <div><div class="at-sym">${t.symbol}</div><div class="at-sym-sub">${t.sector||""}</div></div>
-      <div class="at-meta">
-        <span>Entry ₹${(+t.entry_price||0).toLocaleString("en-IN",{maximumFractionDigits:2})}</span>
-        <span>T1 ₹${(+t.target1||0).toLocaleString("en-IN",{maximumFractionDigits:2})}</span>
-        <span>SL ₹${(+t.stop_loss||0).toLocaleString("en-IN",{maximumFractionDigits:2})}</span>
-      </div>
-      <div></div>
-      <div class="at-pnl zero">Open</div>
-    </div>`).join("");
+    renderActiveTrades(open,{});
+    document.getElementById("activeTradeUpdatedAt").textContent=`Last updated ${new Date().toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"})}`;
+    await refreshActivePnL();
   }catch(e){console.warn("[ActiveTrades]",e);}
+}
+
+function renderActiveTrades(open,prices){
+  const list=document.getElementById("activeTradeList");
+  list.innerHTML=open.map(t=>{
+    const lp=prices[t.symbol]?.ltp;
+    const entry=+(t.entry_price||0);
+    const qty=+(t.shares_20k||0);
+    const pnl=lp&&entry?round2((lp-entry)*qty):null;
+    const pnlPct=lp&&entry?round2(((lp-entry)/entry)*100):null;
+    const pnlCls=pnl==null?"zero":pnl>0?"pos":pnl<0?"neg":"zero";
+    const pnlStr=pnl==null?"—":pnl>0?`+₹${pnl.toLocaleString("en-IN")}`:pnl<0?`-₹${Math.abs(pnl).toLocaleString("en-IN")}`:"₹0";
+    const pctStr=pnlPct==null?"":`${pnlPct>0?"+":""}${pnlPct}%`;
+    return`<div class="at-row">
+      <div>
+        <div class="at-sym">${t.symbol}</div>
+        <div class="at-sym-sub">${t.name||t.sector||""}</div>
+      </div>
+      <div class="at-meta">
+        <div class="at-meta-line">
+          <span class="at-chip">Entry ₹${entry.toLocaleString("en-IN",{maximumFractionDigits:2})}</span>
+          <span class="at-chip">Qty ${qty||"—"}</span>
+          <span class="at-chip open">Open</span>
+        </div>
+        <div class="at-meta-line">
+          <span>T1 ₹${(+t.target1||0).toLocaleString("en-IN",{maximumFractionDigits:2})}</span>
+          <span>SL ₹${(+t.stop_loss||0).toLocaleString("en-IN",{maximumFractionDigits:2})}</span>
+          ${lp?`<span>LTP ₹${lp.toLocaleString("en-IN",{maximumFractionDigits:2})}</span>`:`<span>LTP —</span>`}
+        </div>
+      </div>
+      <div class="at-actions">
+        <button class="btn btn-g" style="font-size:10px;padding:4px 8px" onclick="openTradeEditModal('${t.symbol}')">Edit Entry</button>
+      </div>
+      <div class="at-pnl ${pnlCls}">
+        <span>${pnlStr}</span>
+        <span class="at-pnl-sub">${pctStr}</span>
+      </div>
+    </div>`;
+  }).join("");
 }
 
 async function refreshActivePnL(){
   try{
-    const r=await fetch(`${PROXY}/trades`,{signal:AbortSignal.timeout(8000)});
-    const d=await r.json();
-    if(!d.ok)return;
-    const open=(d.trades||[]).filter(t=>t.status==="open");
+    const open=[...activeTradesCache];
     if(!open.length)return;
     const syms=open.map(t=>t.symbol).join(",");
     const lr=await fetch(`${PROXY}/ltp?symbols=${syms}`,{signal:AbortSignal.timeout(10000)});
     const ld=await lr.json();
     const prices=ld.prices||{};
-    const list=document.getElementById("activeTradeList");
-    list.innerHTML=open.map(t=>{
-      const lp=prices[t.symbol]?.ltp;
-      const entry=+(t.entry_price||0);
-      const qty=+(t.shares_20k||0);
-      const pnl=lp&&entry?round2((lp-entry)*qty):null;
-      const pnlCls=pnl==null?"zero":pnl>0?"pos":"neg";
-      const pnlStr=pnl==null?"—":pnl>0?`+₹${pnl.toLocaleString("en-IN")}`:`-₹${Math.abs(pnl).toLocaleString("en-IN")}`;
-      return`<div class="at-row">
-        <div><div class="at-sym">${t.symbol}</div><div class="at-sym-sub">${t.sector||""}</div></div>
-        <div class="at-meta">
-          <span>Entry ₹${entry.toLocaleString("en-IN",{maximumFractionDigits:2})}</span>
-          <span>T1 ₹${(+t.target1||0).toLocaleString("en-IN",{maximumFractionDigits:2})}</span>
-          <span>SL ₹${(+t.stop_loss||0).toLocaleString("en-IN",{maximumFractionDigits:2})}</span>
-          ${lp?`<span>LTP ₹${lp.toLocaleString("en-IN",{maximumFractionDigits:2})}</span>`:""}
-        </div>
-        <div></div>
-        <div class="at-pnl ${pnlCls}">${pnlStr}</div>
-      </div>`;
-    }).join("");
+    renderActiveTrades(open,prices);
+    document.getElementById("activeTradeUpdatedAt").textContent=`Last updated ${new Date().toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"})}`;
   }catch(e){console.warn("[RefreshPnL]",e);}
 }
 

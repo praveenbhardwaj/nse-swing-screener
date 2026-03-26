@@ -1322,10 +1322,14 @@ def save_trades():
     if not isinstance(rows, list): return jsonify({"ok": False, "error": "expected array"}), 400
     buyable = [r for r in rows if r.get("sig") in ("BUY", "STRONG BUY")]
     if not buyable: return jsonify({"ok": True, "saved": 0})
-    to_insert = []
+    inserted = 0
+    updated = 0
     for r in buyable:
         price = float(r.get("price") or 0)
-        to_insert.append({
+        symbol = r.get("sym") or r.get("symbol")
+        if not symbol:
+            continue
+        payload = {
             "symbol":         r.get("sym") or r.get("symbol"),
             "name":           r.get("name"),
             "sector":         r.get("sector"),
@@ -1345,10 +1349,30 @@ def save_trades():
             "exp_profit_20k": r.get("exp_profit_20k"),
             "max_loss_20k":   r.get("max_loss_20k"),
             "status":         "open",
-        })
+        }
+        try:
+            existing = (_sb.table("trades")
+                        .select("*")
+                        .eq("symbol", symbol)
+                        .eq("status", "open")
+                        .order("scanned_at", desc=True)
+                        .execute()).data
+            force_entry_update = bool(r.get("force_entry_update"))
+            auto_sync = bool(r.get("auto_sync"))
+            if existing:
+                # During autosync, preserve trader-entered entry/qty unless explicitly overridden.
+                if auto_sync and not force_entry_update:
+                    payload["entry_price"] = existing[0].get("entry_price")
+                    payload["shares_20k"] = existing[0].get("shares_20k")
+                _sb.table("trades").update(payload).eq("id", existing[0]["id"]).execute()
+                updated += 1
+            else:
+                _sb.table("trades").insert([payload]).execute()
+                inserted += 1
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
     try:
-        _sb.table("trades").insert(to_insert).execute()
-        return jsonify({"ok": True, "saved": len(to_insert)})
+        return jsonify({"ok": True, "saved": inserted + updated, "inserted": inserted, "updated": updated})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
