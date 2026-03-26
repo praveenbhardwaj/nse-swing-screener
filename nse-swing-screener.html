@@ -256,6 +256,7 @@ tbody tr{animation:fadeUp .18s ease both}
 .at-meta-line{display:flex;gap:10px;flex-wrap:wrap}
 .at-chip{font-family:'JetBrains Mono',monospace;font-size:10px;padding:2px 6px;border-radius:4px;background:var(--white);border:1px solid var(--border);color:var(--sub)}
 .at-chip.open{background:var(--accent-lt);border-color:var(--accent-br);color:var(--accent)}
+.at-chip.price{background:#ecfeff;border-color:#bae6fd;color:#0c4a6e}
 .at-actions{display:flex;gap:6px;justify-content:flex-end}
 .at-pnl{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;text-align:right;white-space:nowrap;display:flex;flex-direction:column;gap:2px}
 .at-pnl-sub{font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:500}
@@ -1489,12 +1490,13 @@ function renderActiveTrades(open,prices,failed=[]){
           <span class="at-chip">Entry ₹${entry.toLocaleString("en-IN",{maximumFractionDigits:2})}</span>
           <span class="at-chip">Date ${entryDate}</span>
           <span class="at-chip">Qty ${qty||"—"}</span>
+          ${lp?`<span class="at-chip price">Current ₹${lp.toLocaleString("en-IN",{maximumFractionDigits:2})}</span>`:`<span class="at-chip">Current —</span>`}
           <span class="at-chip open">Open</span>
         </div>
         <div class="at-meta-line">
           <span>T1 ₹${(+t.target1||0).toLocaleString("en-IN",{maximumFractionDigits:2})}</span>
           <span>SL ₹${(+t.stop_loss||0).toLocaleString("en-IN",{maximumFractionDigits:2})}</span>
-          ${lp?`<span>LTP ₹${lp.toLocaleString("en-IN",{maximumFractionDigits:2})}${source?` · ${source}`:""}</span>`:`<span>LTP —</span>`}
+          ${lp?`<span>LTP Source ${source||"—"}</span>`:`<span>LTP Source —</span>`}
         </div>
       </div>
       <div class="at-actions">
