@@ -1216,7 +1216,28 @@ def get_ltp():
     symbols = [s.strip() for s in request.args.get("symbols", "").split(",") if s.strip()]
     if not symbols: return jsonify({"error": "No symbols"}), 400
     results, failed = {}, []
+
+    def _yf_ltp(sym):
+        if not YF_OK:
+            return None
+        try:
+            hist = yf.Ticker(f"{sym}.NS").history(period="5d", interval="1d", auto_adjust=True)
+            if hist is None or hist.empty:
+                return None
+            closes = hist["Close"].dropna().values.astype(float)
+            if len(closes) == 0:
+                return None
+            ltp = float(closes[-1])
+            prev = float(closes[-2]) if len(closes) > 1 else ltp
+            chg = ltp - prev
+            chg_pct = (chg / prev * 100) if prev else 0.0
+            return {"ltp": round(ltp, 2), "change": round(chg, 2),
+                    "change_pct": round(chg_pct, 2), "source": "yfinance"}
+        except Exception:
+            return None
+
     for sym in symbols:
+        got = False
         try:
             r = requests.get(f"{BASE_URL}/live-data/quote",
                              params={"exchange": "NSE", "segment": "CASH", "trading_symbol": sym},
@@ -1226,10 +1247,19 @@ def get_ltp():
                 p = d["payload"]
                 results[sym] = {"ltp": p.get("last_price") or p.get("ltp"),
                                 "change": round(p.get("day_change") or 0, 2),
-                                "change_pct": round(p.get("day_change_perc") or 0, 2)}
-            else: failed.append(sym)
+                                "change_pct": round(p.get("day_change_perc") or 0, 2),
+                                "source": "groww"}
+                got = bool(results[sym].get("ltp"))
         except Exception as e:
-            failed.append(sym); print(f"[LTP] {sym}: {e}")
+            print(f"[LTP] {sym}: {e}")
+
+        if not got:
+            fb = _yf_ltp(sym)
+            if fb is not None:
+                results[sym] = fb
+            else:
+                failed.append(sym)
+
     return jsonify({"prices": results, "failed": failed})
 
 @app.route("/quote/<symbol>")

@@ -260,6 +260,11 @@ tbody tr{animation:fadeUp .18s ease both}
 .at-pnl{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;text-align:right;white-space:nowrap;display:flex;flex-direction:column;gap:2px}
 .at-pnl-sub{font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:500}
 .at-pnl.pos{color:var(--green)}.at-pnl.neg{color:var(--red)}.at-pnl.zero{color:var(--muted)}
+.at-pnl-card{padding:7px 9px;border-radius:8px;border:1px solid;background:#fff;min-width:110px}
+.at-pnl-card.pos{background:var(--green-lt);border-color:var(--green-br)}
+.at-pnl-card.neg{background:var(--red-lt);border-color:var(--red-br)}
+.at-pnl-card.zero{background:#f8fafc;border-color:#e2e8f0}
+.at-warn{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--amber);background:var(--amber-lt);border:1px solid var(--amber-br);padding:2px 8px;border-radius:20px}
 @media(max-width:900px){.at-row{grid-template-columns:1fr;}.at-actions{justify-content:flex-start;}.at-pnl{text-align:left}}
 
 /* ── MODERN UI REFRESH ───────────────────────────────────────── */
@@ -518,6 +523,7 @@ tbody tr:hover{background:#eef4ff}
     <span class="at-ttl">⚡ Active Trades</span>
     <span class="at-count" id="activeTradeCount">0</span>
     <span class="at-live"><span class="at-live-dot"></span>Live 10s</span>
+    <span class="at-warn" id="activeTradeWarn" style="display:none">LTP unavailable for 0</span>
     <span class="at-sym-sub" id="activeTradeUpdatedAt">Last updated —</span>
     <button class="btn btn-g" style="font-size:11px;padding:4px 10px;margin-left:auto" onclick="refreshActivePnL()">↻ Refresh P&L</button>
   </div>
@@ -1452,10 +1458,19 @@ async function loadActiveTrades(){
   }catch(e){console.warn("[ActiveTrades]",e);}
 }
 
-function renderActiveTrades(open,prices){
+function renderActiveTrades(open,prices,failed=[]){
+  const failedSet=new Set(failed||[]);
+  const warn=document.getElementById("activeTradeWarn");
+  if(failedSet.size>0){
+    warn.style.display="inline-flex";
+    warn.textContent=`LTP unavailable for ${failedSet.size}`;
+  }else{
+    warn.style.display="none";
+  }
   const list=document.getElementById("activeTradeList");
   list.innerHTML=open.map(t=>{
     const lp=prices[t.symbol]?.ltp;
+    const source=prices[t.symbol]?.source;
     const entry=+(t.entry_price||0);
     const qty=+(t.shares_20k||0);
     const entryDate=t.scanned_at?new Date(t.scanned_at).toLocaleDateString("en-IN",{day:"2-digit",month:"short",year:"numeric"}):"—";
@@ -1479,13 +1494,13 @@ function renderActiveTrades(open,prices){
         <div class="at-meta-line">
           <span>T1 ₹${(+t.target1||0).toLocaleString("en-IN",{maximumFractionDigits:2})}</span>
           <span>SL ₹${(+t.stop_loss||0).toLocaleString("en-IN",{maximumFractionDigits:2})}</span>
-          ${lp?`<span>LTP ₹${lp.toLocaleString("en-IN",{maximumFractionDigits:2})}</span>`:`<span>LTP —</span>`}
+          ${lp?`<span>LTP ₹${lp.toLocaleString("en-IN",{maximumFractionDigits:2})}${source?` · ${source}`:""}</span>`:`<span>LTP —</span>`}
         </div>
       </div>
       <div class="at-actions">
         <button class="btn btn-g" style="font-size:10px;padding:4px 8px" onclick="openTradeEditModal('${t.symbol}')">Edit Entry</button>
       </div>
-      <div class="at-pnl ${pnlCls}">
+      <div class="at-pnl at-pnl-card ${pnlCls}">
         <span>${pnlStr}</span>
         <span class="at-pnl-sub">${pctStr}</span>
       </div>
@@ -1503,7 +1518,8 @@ async function refreshActivePnL(){
     const lr=await fetch(`${PROXY}/ltp?symbols=${syms}`,{signal:AbortSignal.timeout(10000)});
     const ld=await lr.json();
     const prices=ld.prices||{};
-    renderActiveTrades(open,prices);
+    const failed=ld.failed||[];
+    renderActiveTrades(open,prices,failed);
     document.getElementById("activeTradeUpdatedAt").textContent=`Last updated ${new Date().toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"})}`;
   }catch(e){console.warn("[RefreshPnL]",e);}
   finally{activePnlBusy=false;}
