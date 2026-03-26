@@ -185,6 +185,8 @@ tbody tr{animation:fadeUp .18s ease both}
 .pill{padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600}
 .pill-g{background:#dcfce7;color:#166534}.pill-a{background:#fef3c7;color:#92400e}.pill-m{background:#f1f5f9;color:#64748b}
 .pill-up{background:#dcfce7;color:#166534}.pill-dn{background:#fef2f2;color:#991b1b}.pill-n{background:#f1f5f9;color:#64748b}
+.pill-strong{background:#dcfce7;color:#14532d}
+.pill-buy{background:#dbeafe;color:#1e3a8a}
 
 /* PRICE CELL */
 .price-main{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:500}
@@ -584,6 +586,7 @@ tbody tr:hover{background:#eef4ff}
     </div>
     <div id="portfolioTableWrap"></div>
   </div>
+  <div id="portfolioModuleRoot"></div>
 </div>
 
 <!-- ═══════════════ WATCHLISTS TAB ═══════════════ -->
@@ -897,6 +900,7 @@ window.addEventListener("load",async()=>{
   loadUniverse();
   loadActiveTrades();
   loadPortfolioSummary();
+  if(typeof window.initPortfolioModule==="function")window.initPortfolioModule();
   document.addEventListener("visibilitychange",()=>{
     if(document.hidden)stopActivePnlAutoRefresh();
     else startActivePnlAutoRefresh();
@@ -1467,6 +1471,7 @@ function switchTab(name){
     if(btn)btn.classList.toggle("active",tab===name);
   });
   if(name==="watchlists")startActivePnlAutoRefresh(); else stopActivePnlAutoRefresh();
+  if(name==="portfolio"&&typeof window.initPortfolioModule==="function")window.initPortfolioModule();
   if(name==="history"&&historyData.length===0)loadHistory();
   if(["overview","portfolio","analytics","reports"].includes(name))loadPortfolioSummary();
 }
@@ -1754,5 +1759,6 @@ function showToast(msg,type){
   _toastTimer=setTimeout(()=>{el.className="toast hidden";},4000);
 }
 </script>
+<script type="module" src="./frontend/portfolio/index.js"></script>
 </body>
 </html>

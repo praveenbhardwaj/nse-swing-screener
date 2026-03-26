@@ -35,12 +35,16 @@ class _SBTable:
         self._rows = rows; return self
     def update(self, data):
         self._upd = data; return self
+    def delete(self):
+        self._del = True; return self
 
     def execute(self):
         url = f"{self._base}/rest/v1/{self._table}"
         params = {k: v for k, v in self._filters.items()}
         h = {**self._headers, "Prefer": "return=representation"}
-        if self._upd is not None:
+        if getattr(self, "_del", False):
+            r = requests.delete(url, headers=h, params=params, timeout=15)
+        elif self._upd is not None:
             r = requests.patch(url, headers=h, params=params, json=self._upd, timeout=15)
         elif hasattr(self, "_rows"):
             r = requests.post(url, headers=h, json=self._rows, timeout=15)
@@ -1494,6 +1498,248 @@ def portfolio_summary():
             },
             "allocation": allocation,
             "holdings": holdings,
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+def _to_float(v, default=0.0):
+    try:
+        return float(v)
+    except Exception:
+        return default
+
+
+def _record_portfolio_event(event_type, symbol, position_id=None, payload=None, message=None):
+    if not SB_OK:
+        return
+    try:
+        _sb.table("portfolio_events").insert([{
+            "position_id": position_id,
+            "symbol": symbol,
+            "event_type": event_type,
+            "payload_json": payload or {},
+            "message": message or "",
+        }]).execute()
+    except Exception as e:
+        print(f"[portfolio_events] {e}")
+
+
+@app.route("/portfolio/recommendations")
+def portfolio_recommendations():
+    if not SB_OK:
+        return jsonify({"ok": False, "error": "Supabase not configured"}), 503
+    try:
+        recs = _sb.table("recommendations").select("*").order("created_at", desc=True).execute().data
+        return jsonify({"ok": True, "recommendations": recs or []})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/portfolio/recommendations", methods=["POST"])
+def create_portfolio_recommendation():
+    if not SB_OK:
+        return jsonify({"ok": False, "error": "Supabase not configured"}), 503
+    data = request.get_json(silent=True) or {}
+    symbol = (data.get("symbol") or "").strip().upper()
+    rating = (data.get("rating") or "buy").strip().lower()
+    if not symbol:
+        return jsonify({"ok": False, "error": "symbol required"}), 400
+    if rating not in ("buy", "strong_buy"):
+        return jsonify({"ok": False, "error": "rating must be buy or strong_buy"}), 400
+    payload = {
+        "symbol": symbol,
+        "rating": rating,
+        "target_price": _to_float(data.get("target_price")),
+        "stop_loss": _to_float(data.get("stop_loss")),
+        "status": (data.get("status") or "active").strip().lower(),
+        "rationale": data.get("rationale"),
+        "updated_at": pd.Timestamp.now().isoformat(),
+    }
+    try:
+        inserted = _sb.table("recommendations").insert([payload]).execute().data
+        _record_portfolio_event("create", symbol, payload=payload, message="Recommendation created")
+        return jsonify({"ok": True, "recommendation": (inserted or [None])[0]})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/portfolio/recommendations/<rec_id>", methods=["PUT"])
+def update_portfolio_recommendation(rec_id):
+    if not SB_OK:
+        return jsonify({"ok": False, "error": "Supabase not configured"}), 503
+    data = request.get_json(silent=True) or {}
+    payload = {
+        "symbol": (data.get("symbol") or "").strip().upper() or None,
+        "rating": (data.get("rating") or "").strip().lower() or None,
+        "target_price": _to_float(data.get("target_price")) if data.get("target_price") is not None else None,
+        "stop_loss": _to_float(data.get("stop_loss")) if data.get("stop_loss") is not None else None,
+        "status": (data.get("status") or "").strip().lower() or None,
+        "rationale": data.get("rationale"),
+        "updated_at": pd.Timestamp.now().isoformat(),
+    }
+    payload = {k: v for k, v in payload.items() if v is not None}
+    try:
+        updated = _sb.table("recommendations").update(payload).eq("id", rec_id).execute().data
+        if not updated:
+            return jsonify({"ok": False, "error": "recommendation not found"}), 404
+        symbol = updated[0].get("symbol")
+        _record_portfolio_event("update", symbol, payload=payload, message="Recommendation updated")
+        return jsonify({"ok": True, "recommendation": updated[0]})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/portfolio/recommendations/<rec_id>", methods=["DELETE"])
+def delete_portfolio_recommendation(rec_id):
+    if not SB_OK:
+        return jsonify({"ok": False, "error": "Supabase not configured"}), 503
+    try:
+        deleted = _sb.table("recommendations").delete().eq("id", rec_id).execute().data
+        if not deleted:
+            return jsonify({"ok": False, "error": "recommendation not found"}), 404
+        symbol = deleted[0].get("symbol")
+        _record_portfolio_event("delete", symbol, payload={"id": rec_id}, message="Recommendation deleted")
+        return jsonify({"ok": True, "deleted": rec_id})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/portfolio/positions")
+def portfolio_positions():
+    if not SB_OK:
+        return jsonify({"ok": False, "error": "Supabase not configured"}), 503
+    try:
+        positions = _sb.table("portfolio_positions").select("*").order("opened_at", desc=True).execute().data or []
+        active = [p for p in positions if p.get("status") == "active" and p.get("symbol")]
+        if active:
+            symbols = sorted({p.get("symbol") for p in active})
+            prices, _ = _fetch_ltp_batch(symbols)
+            for p in positions:
+                sym = p.get("symbol")
+                if p.get("status") == "active" and sym in prices:
+                    ltp = _to_float((prices.get(sym, {}) or {}).get("ltp"), _to_float(p.get("current_price")))
+                    p["current_price"] = round(ltp, 2)
+        return jsonify({"ok": True, "positions": positions})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/portfolio/positions", methods=["POST"])
+def create_portfolio_position():
+    if not SB_OK:
+        return jsonify({"ok": False, "error": "Supabase not configured"}), 503
+    data = request.get_json(silent=True) or {}
+    symbol = (data.get("symbol") or "").strip().upper()
+    if not symbol:
+        return jsonify({"ok": False, "error": "symbol required"}), 400
+    payload = {
+        "symbol": symbol,
+        "qty": _to_float(data.get("qty")),
+        "entry_price": _to_float(data.get("entry_price")),
+        "current_price": _to_float(data.get("current_price"), _to_float(data.get("entry_price"))),
+        "status": (data.get("status") or "active").strip().lower(),
+        "notes": data.get("notes"),
+        "updated_at": pd.Timestamp.now().isoformat(),
+    }
+    try:
+        inserted = _sb.table("portfolio_positions").insert([payload]).execute().data
+        inserted_row = (inserted or [None])[0]
+        _record_portfolio_event("create", symbol, position_id=(inserted_row or {}).get("id"), payload=payload, message="Position created")
+        return jsonify({"ok": True, "position": inserted_row})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/portfolio/positions/<position_id>", methods=["PUT"])
+def update_portfolio_position(position_id):
+    if not SB_OK:
+        return jsonify({"ok": False, "error": "Supabase not configured"}), 503
+    data = request.get_json(silent=True) or {}
+    status = (data.get("status") or "").strip().lower() or None
+    payload = {
+        "symbol": (data.get("symbol") or "").strip().upper() or None,
+        "qty": _to_float(data.get("qty")) if data.get("qty") is not None else None,
+        "entry_price": _to_float(data.get("entry_price")) if data.get("entry_price") is not None else None,
+        "current_price": _to_float(data.get("current_price")) if data.get("current_price") is not None else None,
+        "status": status,
+        "notes": data.get("notes"),
+        "updated_at": pd.Timestamp.now().isoformat(),
+    }
+    if status == "closed":
+        payload["closed_at"] = pd.Timestamp.now().isoformat()
+    payload = {k: v for k, v in payload.items() if v is not None}
+    try:
+        updated = _sb.table("portfolio_positions").update(payload).eq("id", position_id).execute().data
+        if not updated:
+            return jsonify({"ok": False, "error": "position not found"}), 404
+        row = updated[0]
+        event_type = "close" if row.get("status") == "closed" else "update"
+        _record_portfolio_event(event_type, row.get("symbol"), position_id=position_id, payload=payload, message=f"Position {event_type}d")
+        return jsonify({"ok": True, "position": row})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/portfolio/positions/<position_id>", methods=["DELETE"])
+def delete_portfolio_position(position_id):
+    if not SB_OK:
+        return jsonify({"ok": False, "error": "Supabase not configured"}), 503
+    try:
+        deleted = _sb.table("portfolio_positions").delete().eq("id", position_id).execute().data
+        if not deleted:
+            return jsonify({"ok": False, "error": "position not found"}), 404
+        row = deleted[0]
+        _record_portfolio_event("delete", row.get("symbol"), position_id=position_id, payload={"id": position_id}, message="Position deleted")
+        return jsonify({"ok": True, "deleted": position_id})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/portfolio/history")
+def portfolio_history():
+    if not SB_OK:
+        return jsonify({"ok": False, "error": "Supabase not configured"}), 503
+    try:
+        events = _sb.table("portfolio_events").select("*").order("created_at", desc=True).execute().data
+        return jsonify({"ok": True, "history": events or []})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/portfolio/analytics")
+def portfolio_analytics():
+    if not SB_OK:
+        return jsonify({"ok": False, "error": "Supabase not configured"}), 503
+    try:
+        positions = _sb.table("portfolio_positions").select("*").execute().data or []
+        active = [p for p in positions if p.get("status") == "active"]
+        closed = [p for p in positions if p.get("status") == "closed"]
+
+        total_invested = sum(_to_float(p.get("qty")) * _to_float(p.get("entry_price")) for p in active)
+        current_value = sum(_to_float(p.get("qty")) * _to_float(p.get("current_price"), _to_float(p.get("entry_price"))) for p in active)
+        unrealized_pnl = current_value - total_invested
+
+        realized_values = [
+            (_to_float(p.get("qty")) * (_to_float(p.get("current_price")) - _to_float(p.get("entry_price"))))
+            for p in closed
+        ]
+        realized_pnl = sum(realized_values)
+        wins = len([v for v in realized_values if v > 0])
+        closed_count = len(closed)
+        win_rate = (wins / closed_count * 100.0) if closed_count else 0.0
+
+        return jsonify({
+            "ok": True,
+            "analytics": {
+                "active_positions": len(active),
+                "closed_positions": closed_count,
+                "total_invested": round(total_invested, 2),
+                "current_value": round(current_value, 2),
+                "unrealized_pnl": round(unrealized_pnl, 2),
+                "realized_pnl": round(realized_pnl, 2),
+                "win_rate": round(win_rate, 1),
+            },
         })
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
