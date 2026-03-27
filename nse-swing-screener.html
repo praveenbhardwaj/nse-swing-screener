@@ -523,6 +523,7 @@ tbody tr:hover{background:#eef4ff}
     <input class="modal-inp" type="password" id="credSecret" placeholder="your-secret" autocomplete="off">
     <div class="modal-err" id="credErr"></div>
     <button class="btn btn-p" id="credSubmitBtn" onclick="submitCredentials()" style="width:100%">Connect to Groww</button>
+    <button class="btn btn-g" onclick="skipGrowwAndContinue()" style="width:100%;margin-top:8px">Use Yahoo fallback</button>
     <div class="modal-note">🔒 Credentials stored in sessionStorage only — cleared when you close the tab.</div>
   </div>
 </div>
@@ -555,6 +556,7 @@ tbody tr:hover{background:#eef4ff}
     <input class="search" placeholder="Search portfolio..." />
     <div class="top-actions">
       <span class="nav-date" id="navDate">—</span>
+      <button class="btn btn-g" onclick="showCredentialModal()">Connect Groww</button>
       <button class="btn btn-g" onclick="fetchMarketData()">Refresh</button>
     </div>
   </div>
@@ -893,7 +895,6 @@ window.addEventListener("load",async()=>{
     document.getElementById("minScoreDisp").textContent=e.target.value;
   });
   const credsSet=sessionStorage.getItem("groww_creds_set")==="1";
-  if(!credsSet){showCredentialModal();return;}
   await checkProxy();
   switchTab("overview");
   fetchMarketData();
@@ -901,6 +902,9 @@ window.addEventListener("load",async()=>{
   loadActiveTrades();
   loadPortfolioSummary();
   if(typeof window.initPortfolioModule==="function")window.initPortfolioModule();
+  if(!credsSet){
+    showToast("Groww not connected. Running with Yahoo fallback.","info");
+  }
   document.addEventListener("visibilitychange",()=>{
     if(document.hidden)stopActivePnlAutoRefresh();
     else startActivePnlAutoRefresh();
@@ -1352,11 +1356,18 @@ function clearAll(){
 function showCredentialModal(){
   document.getElementById("credModal").style.display="flex";
   document.getElementById("credErr").textContent="";
-  document.getElementById("runBtn").disabled=true;
+  const runBtn=document.getElementById("runBtn");
+  if(runBtn)runBtn.disabled=true;
 }
 function hideCredentialModal(){
   document.getElementById("credModal").style.display="none";
-  document.getElementById("runBtn").disabled=false;
+  const runBtn=document.getElementById("runBtn");
+  if(runBtn)runBtn.disabled=false;
+}
+function skipGrowwAndContinue(){
+  sessionStorage.removeItem("groww_creds_set");
+  hideCredentialModal();
+  showToast("Using Yahoo fallback for live prices.","info");
 }
 async function submitCredentials(){
   const key=document.getElementById("credKey").value.trim();
