@@ -1369,7 +1369,17 @@ async function submitCredentials(){
     const r=await fetch(`${PROXY}/set-credentials`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({api_key:key,api_secret:secret})});
     const d=await r.json();
     if(d.ok){sessionStorage.setItem("groww_creds_set","1");hideCredentialModal();await checkProxy();fetchMarketData();loadUniverse();}
-    else errEl.textContent=d.error||"Groww rejected the credentials.";
+    else{
+      const retryAfter=d?.details?.retry_after_seconds;
+      const apiMsg=d?.details?.payload?.errorMessage?.message
+        || d?.details?.payload?.error?.message
+        || d?.details?.attempts?.[0]?.payload?.errorMessage?.message
+        || d?.details?.attempts?.[0]?.payload?.error?.message
+        || d?.details?.message
+        || d?.error
+        || "Groww rejected the credentials.";
+      errEl.textContent=retryAfter?`${apiMsg} (Retry after ${retryAfter}s)`:apiMsg;
+    }
   }catch(e){errEl.textContent="Network error — is the backend running?";}
   finally{btn.disabled=false;btn.textContent="Connect to Groww";}
 }

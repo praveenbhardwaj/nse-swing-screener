@@ -112,21 +112,41 @@ def _request_access_token(key, secret):
     if not key or not secret:
         return None, {"message": "Missing API key/secret"}
     ts = str(int(time.time()))
-    try:
-        resp = requests.post(
-            f"{BASE_URL}/token/api/access",
-            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            json={"key_type": "approval", "checksum": generate_checksum(secret, ts), "timestamp": ts},
-            timeout=10)
-    except Exception as e:
-        return None, {"message": "Token request failed", "detail": str(e)}
-    details = _token_error_details(resp)
-    payload = details.get("payload") or {}
-    token = payload.get("token")
-    if token:
-        return token, None
-    details["message"] = "Groww token endpoint rejected credentials"
-    return None, details
+    checksum = generate_checksum(secret, ts)
+    bodies = [
+        {"key_type": "approval", "checksum": checksum, "timestamp": ts},
+        {"checksum": checksum, "timestamp": ts},
+        {"keyType": "approval", "checksum": checksum, "timestamp": ts},
+    ]
+    attempt_errors = []
+    for body in bodies:
+        try:
+            resp = requests.post(
+                f"{BASE_URL}/token/api/access",
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                json=body,
+                timeout=10)
+        except Exception as e:
+            attempt_errors.append({"request_body": body, "error": str(e)})
+            continue
+        details = _token_error_details(resp)
+        if resp.status_code == 429:
+            retry_after = resp.headers.get("Retry-After")
+            details["message"] = "Groww rate limit reached. Please wait and retry."
+            if retry_after:
+                details["retry_after_seconds"] = retry_after
+            details["request_body"] = body
+            return None, details
+        payload = details.get("payload") or {}
+        token = payload.get("token")
+        if token:
+            return token, None
+        details["request_body"] = body
+        attempt_errors.append(details)
+    return None, {
+        "message": "Groww token endpoint rejected credentials",
+        "attempts": attempt_errors[:3],
+    }
 
 def get_access_token(force=False):
     global _access_token, _token_fetched_at
@@ -1224,29 +1244,45 @@ def _fetch_ltp_batch(symbols):
     if not symbols:
         return {}, []
     prices, failed = {}, []
+    groww_available = True
+    token = get_access_token()
+    if not token:
+        groww_available = False
     for sym in symbols:
         got = False
-        try:
-            r = requests.get(
-                f"{BASE_URL}/live-data/quote",
-                params={"exchange": "NSE", "segment": "CASH", "trading_symbol": sym},
-                headers=groww_headers(),
-                timeout=5,
-            )
-            d = r.json()
-            if d.get("status") == "SUCCESS":
-                p = d["payload"]
-                ltp = p.get("last_price") or p.get("ltp")
-                if ltp:
-                    prices[sym] = {
-                        "ltp": float(ltp),
-                        "change": round(p.get("day_change") or 0, 2),
-                        "change_pct": round(p.get("day_change_perc") or 0, 2),
-                        "source": "groww",
-                    }
-                    got = True
-        except Exception:
-            pass
+        if groww_available:
+            try:
+                r = requests.get(
+                    f"{BASE_URL}/live-data/quote",
+                    params={"exchange": "NSE", "segment": "CASH", "trading_symbol": sym},
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Accept": "application/json",
+                        "X-API-VERSION": "1.0",
+                    },
+                    timeout=5,
+                )
+                d = r.json()
+                if r.status_code == 429:
+                    # Circuit break Groww for remaining symbols in this batch.
+                    groww_available = False
+                elif d.get("status") == "SUCCESS":
+                    p = d["payload"]
+                    ltp = p.get("last_price") or p.get("ltp")
+                    if ltp:
+                        prices[sym] = {
+                            "ltp": float(ltp),
+                            "change": round(p.get("day_change") or 0, 2),
+                            "change_pct": round(p.get("day_change_perc") or 0, 2),
+                            "source": "groww",
+                        }
+                        got = True
+                else:
+                    err_code = str((d.get("error") or {}).get("code", ""))
+                    if err_code in ("401", "403", "429"):
+                        groww_available = False
+            except Exception:
+                pass
         if not got and YF_OK:
             try:
                 hist = yf.Ticker(f"{sym}.NS").history(period="5d", interval="1d", auto_adjust=True)
@@ -1299,13 +1335,45 @@ def get_ltp():
 
 @app.route("/quote/<symbol>")
 def get_quote(symbol):
-    try:
-        r = requests.get(f"{BASE_URL}/live-data/quote",
-                         params={"exchange": "NSE", "segment": "CASH", "trading_symbol": symbol},
-                         headers=groww_headers(), timeout=5)
-        return jsonify(r.json())
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    token = get_access_token()
+    if token:
+        try:
+            r = requests.get(
+                f"{BASE_URL}/live-data/quote",
+                params={"exchange": "NSE", "segment": "CASH", "trading_symbol": symbol},
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/json",
+                    "X-API-VERSION": "1.0",
+                },
+                timeout=5,
+            )
+            d = r.json()
+            if d.get("status") == "SUCCESS":
+                return jsonify(d)
+        except Exception:
+            pass
+    if YF_OK:
+        try:
+            hist = yf.Ticker(f"{symbol}.NS").history(period="5d", interval="1d", auto_adjust=True)
+            if hist is not None and not hist.empty:
+                closes = hist["Close"].dropna().values.astype(float)
+                ltp = float(closes[-1])
+                prev = float(closes[-2]) if len(closes) > 1 else ltp
+                chg = ltp - prev
+                chg_pct = (chg / prev * 100) if prev else 0.0
+                return jsonify({
+                    "status": "SUCCESS",
+                    "payload": {
+                        "last_price": round(ltp, 2),
+                        "day_change": round(chg, 2),
+                        "day_change_perc": round(chg_pct, 2),
+                        "source": "yfinance",
+                    }
+                })
+        except Exception as e:
+            return jsonify({"error": f"Quote fallback failed: {e}"}), 500
+    return jsonify({"error": "Quote unavailable from Groww and yfinance"}), 503
 
 @app.route("/refresh-token", methods=["POST"])
 def refresh_token():
