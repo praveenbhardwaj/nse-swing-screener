@@ -1687,7 +1687,7 @@ function round2(x){return Math.round(x*100)/100;}
 // ── ACTIVE TRADES ─────────────────────────────────────────────
 async function loadActiveTrades(){
   try{
-    const r=await fetch(`${PROXY}/trades`,{signal:AbortSignal.timeout(8000)});
+    const r=await fetch(`${PROXY}/trades`,{signal:AbortSignal.timeout(20000)});
     const d=await r.json();
     if(!d.ok)return;
     const open=(d.trades||[]).filter(t=>t.status==="open");

@@ -1644,13 +1644,60 @@ def run_trade_outcome_check():
     if not open_trades:
         return {"ok": True, "checked": 0, "updated": 0}, 200
 
-    updates = []
+    updates_by_id = {}
     upd_lock = threading.Lock()
+    today = pd.Timestamp.now().normalize()
+
+    # First pass: use latest LTP to catch live/session hits quickly.
+    try:
+        symbols = sorted({t.get("symbol") for t in open_trades if t.get("symbol")})
+        ltp_prices, _ = _fetch_ltp_batch(symbols)
+    except Exception:
+        ltp_prices = {}
+
+    for trade in open_trades:
+        try:
+            tid = trade.get("id")
+            sym = trade.get("symbol")
+            if not tid or not sym:
+                continue
+            t1 = float(trade["target1"])
+            sl = float(trade["stop_loss"])
+            ltp = float((ltp_prices.get(sym, {}) or {}).get("ltp") or 0)
+            if ltp <= 0:
+                continue
+            entry_ts = trade.get("entry_date") or trade.get("entered_at") or trade.get("scanned_at", "")
+            if entry_ts:
+                days_to_outcome = max((today.date() - pd.Timestamp(entry_ts).date()).days + 1, 1)
+            else:
+                days_to_outcome = 1
+            # Keep SL precedence over target on ambiguous ticks.
+            if ltp <= sl:
+                updates_by_id[tid] = {
+                    "id": tid,
+                    "status": "sl_hit",
+                    "outcome_price": sl,
+                    "outcome_date": today.date().isoformat(),
+                    "days_to_outcome": days_to_outcome,
+                }
+            elif ltp >= t1:
+                updates_by_id[tid] = {
+                    "id": tid,
+                    "status": "target_hit",
+                    "outcome_price": t1,
+                    "outcome_date": today.date().isoformat(),
+                    "days_to_outcome": days_to_outcome,
+                }
+        except Exception:
+            continue
 
     def check_one(trade):
         try:
             sym = trade.get("symbol")
-            if not sym:
+            tid = trade.get("id")
+            if not sym or not tid:
+                return
+            if tid in updates_by_id:
                 return
             t1 = float(trade["target1"])
             sl = float(trade["stop_loss"])
@@ -1659,8 +1706,9 @@ def run_trade_outcome_check():
             entry_ts = trade.get("entry_date") or trade.get("entered_at") or trade.get("scanned_at", "")
             if not entry_ts:
                 return
-            start = pd.Timestamp(entry_ts).normalize() + pd.Timedelta(days=1)
-            today = pd.Timestamp.now().normalize()
+            entry_day = pd.Timestamp(entry_ts).normalize()
+            # Include entry day to avoid missing same-day SL/target hits.
+            start = entry_day
             if start > today:
                 return
             df = yf.Ticker(f"{sym}.NS").history(
@@ -1675,17 +1723,17 @@ def run_trade_outcome_check():
                 # Keep SL precedence if both levels are touched in a single candle.
                 if low <= sl:
                     with upd_lock:
-                        updates.append({"id": trade["id"], "status": "sl_hit",
-                                        "outcome_price": sl,
-                                        "outcome_date": dt.date().isoformat(),
-                                        "days_to_outcome": i + 1})
+                        updates_by_id[tid] = {"id": tid, "status": "sl_hit",
+                                              "outcome_price": sl,
+                                              "outcome_date": dt.date().isoformat(),
+                                              "days_to_outcome": max((dt.date() - entry_day.date()).days + 1, 1)}
                     break
                 if high >= t1:
                     with upd_lock:
-                        updates.append({"id": trade["id"], "status": "target_hit",
-                                        "outcome_price": t1,
-                                        "outcome_date": dt.date().isoformat(),
-                                        "days_to_outcome": i + 1})
+                        updates_by_id[tid] = {"id": tid, "status": "target_hit",
+                                              "outcome_price": t1,
+                                              "outcome_date": dt.date().isoformat(),
+                                              "days_to_outcome": max((dt.date() - entry_day.date()).days + 1, 1)}
                     break
         except Exception as e:
             print(f"[check_one] {trade.get('symbol','?')}: {e}")
@@ -1696,6 +1744,7 @@ def run_trade_outcome_check():
     except Exception as e:
         return {"ok": False, "error": f"ThreadPool: {e}"}, 500
 
+    updates = list(updates_by_id.values())
     for upd in updates:
         tid = upd.pop("id")
         try:
