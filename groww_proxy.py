@@ -1470,6 +1470,21 @@ def save_trades():
         symbol = r.get("sym") or r.get("symbol")
         if not symbol:
             continue
+        target1 = r.get("t1")
+        target2 = r.get("t2")
+        stop_loss = r.get("sl")
+        if target1 is not None:
+            target1 = _to_float(target1, None)
+        if target2 is not None:
+            target2 = _to_float(target2, None)
+        if stop_loss is not None:
+            stop_loss = _to_float(stop_loss, None)
+        if target1 is not None and target1 <= price:
+            return jsonify({"ok": False, "error": f"Invalid target1 for {symbol}: must be greater than entry price"}), 400
+        if target2 is not None and target1 is not None and target2 < target1:
+            return jsonify({"ok": False, "error": f"Invalid target2 for {symbol}: must be greater than or equal to target1"}), 400
+        if stop_loss is not None and stop_loss >= price:
+            return jsonify({"ok": False, "error": f"Invalid stop_loss for {symbol}: must be below entry price"}), 400
         payload = {
             "symbol":         r.get("sym") or r.get("symbol"),
             "name":           r.get("name"),
@@ -1480,9 +1495,9 @@ def save_trades():
             "entry_price":    price,
             "buy_range_low":  r.get("buy_range_low",  round(price * 0.990, 2)),
             "buy_range_high": r.get("buy_range_high", round(price * 1.005, 2)),
-            "target1":        r.get("t1"),
-            "target2":        r.get("t2"),
-            "stop_loss":      r.get("sl"),
+            "target1":        target1,
+            "target2":        target2,
+            "stop_loss":      stop_loss,
             "tp_pct":         r.get("t1_pct") or r.get("tp_pct"),
             "sl_pct":         r.get("sl_pct"),
             "rr":             r.get("rr"),
@@ -1524,8 +1539,11 @@ def save_trades():
 def get_trades():
     if not SB_OK: return jsonify({"ok": False, "error": "Supabase not configured"}), 503
     try:
+        outcome_res, outcome_status = run_trade_outcome_check()
         resp = _sb.table("trades").select("*").order("scanned_at", desc=True).execute()
-        return jsonify({"ok": True, "trades": resp.data})
+        if outcome_status >= 400:
+            return jsonify({"ok": True, "trades": resp.data, "outcome_reconciled": outcome_res, "outcome_reconcile_warning": True})
+        return jsonify({"ok": True, "trades": resp.data, "outcome_reconciled": outcome_res})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
@@ -1609,6 +1627,83 @@ def _to_float(v, default=0.0):
         return float(v)
     except Exception:
         return default
+
+
+def run_trade_outcome_check():
+    """Reconcile open trades against historical OHLC and close hit outcomes."""
+    if not SB_OK:
+        return {"ok": False, "error": "Supabase not configured"}, 503
+    if not YF_OK:
+        return {"ok": False, "error": "yfinance not available"}, 503
+    try:
+        resp = _sb.table("trades").select("*").eq("status", "open").execute()
+        open_trades = [t for t in resp.data
+                       if t.get("target1") is not None and t.get("stop_loss") is not None]
+    except Exception as e:
+        return {"ok": False, "error": str(e)}, 500
+    if not open_trades:
+        return {"ok": True, "checked": 0, "updated": 0}, 200
+
+    updates = []
+    upd_lock = threading.Lock()
+
+    def check_one(trade):
+        try:
+            sym = trade.get("symbol")
+            if not sym:
+                return
+            t1 = float(trade["target1"])
+            sl = float(trade["stop_loss"])
+            if t1 <= 0 or sl <= 0:
+                return
+            entry_ts = trade.get("entry_date") or trade.get("entered_at") or trade.get("scanned_at", "")
+            if not entry_ts:
+                return
+            start = pd.Timestamp(entry_ts).normalize() + pd.Timedelta(days=1)
+            today = pd.Timestamp.now().normalize()
+            if start > today:
+                return
+            df = yf.Ticker(f"{sym}.NS").history(
+                start=start.strftime("%Y-%m-%d"),
+                end=(today + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
+                interval="1d", auto_adjust=True)
+            if df is None or df.empty:
+                return
+            for i, (dt, row) in enumerate(df.iterrows()):
+                low = float(row["Low"])
+                high = float(row["High"])
+                # Keep SL precedence if both levels are touched in a single candle.
+                if low <= sl:
+                    with upd_lock:
+                        updates.append({"id": trade["id"], "status": "sl_hit",
+                                        "outcome_price": sl,
+                                        "outcome_date": dt.date().isoformat(),
+                                        "days_to_outcome": i + 1})
+                    break
+                if high >= t1:
+                    with upd_lock:
+                        updates.append({"id": trade["id"], "status": "target_hit",
+                                        "outcome_price": t1,
+                                        "outcome_date": dt.date().isoformat(),
+                                        "days_to_outcome": i + 1})
+                    break
+        except Exception as e:
+            print(f"[check_one] {trade.get('symbol','?')}: {e}")
+
+    try:
+        with ThreadPoolExecutor(max_workers=10) as ex:
+            list(ex.map(check_one, open_trades))
+    except Exception as e:
+        return {"ok": False, "error": f"ThreadPool: {e}"}, 500
+
+    for upd in updates:
+        tid = upd.pop("id")
+        try:
+            _sb.table("trades").update(upd).eq("id", tid).execute()
+        except Exception as e:
+            print(f"[outcomes] update failed: {e}")
+
+    return {"ok": True, "checked": len(open_trades), "updated": len(updates)}, 200
 
 
 def _record_portfolio_event(event_type, symbol, position_id=None, payload=None, message=None):
@@ -1847,62 +1942,8 @@ def portfolio_analytics():
 
 @app.route("/check-outcomes", methods=["POST"])
 def check_outcomes():
-    if not SB_OK: return jsonify({"ok": False, "error": "Supabase not configured"}), 503
-    if not YF_OK: return jsonify({"ok": False, "error": "yfinance not available"}), 503
-    try:
-        resp = _sb.table("trades").select("*").eq("status", "open").execute()
-        open_trades = [t for t in resp.data
-                       if t.get("target1") is not None and t.get("stop_loss") is not None]
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-    if not open_trades: return jsonify({"ok": True, "checked": 0, "updated": 0})
-
-    updates = []; upd_lock = threading.Lock()
-
-    def check_one(trade):
-        try:
-            sym   = trade["symbol"]
-            t1    = float(trade["target1"]); sl = float(trade["stop_loss"])
-            entry_ts = trade.get("entry_date") or trade.get("entered_at") or trade.get("scanned_at", "")
-            start = pd.Timestamp(entry_ts).normalize() + pd.Timedelta(days=1)
-            today = pd.Timestamp.now().normalize()
-            if start > today: return
-            df = yf.Ticker(f"{sym}.NS").history(
-                start=start.strftime("%Y-%m-%d"),
-                end=(today + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
-                interval="1d", auto_adjust=True)
-            if df is None or df.empty: return
-            for i, (dt, row) in enumerate(df.iterrows()):
-                low = float(row["Low"]); high = float(row["High"])
-                if low <= sl:
-                    with upd_lock:
-                        updates.append({"id": trade["id"], "status": "sl_hit",
-                                        "outcome_price": sl,
-                                        "outcome_date": dt.date().isoformat(),
-                                        "days_to_outcome": i + 1}); break
-                elif high >= t1:
-                    with upd_lock:
-                        updates.append({"id": trade["id"], "status": "target_hit",
-                                        "outcome_price": t1,
-                                        "outcome_date": dt.date().isoformat(),
-                                        "days_to_outcome": i + 1}); break
-        except Exception as e:
-            print(f"[check_one] {trade.get('symbol','?')}: {e}")
-
-    try:
-        with ThreadPoolExecutor(max_workers=10) as ex:
-            list(ex.map(check_one, open_trades))
-    except Exception as e:
-        return jsonify({"ok": False, "error": f"ThreadPool: {e}"}), 500
-
-    for upd in updates:
-        tid = upd.pop("id")
-        try:
-            _sb.table("trades").update(upd).eq("id", tid).execute()
-        except Exception as e:
-            print(f"[outcomes] update failed: {e}")
-
-    return jsonify({"ok": True, "checked": len(open_trades), "updated": len(updates)})
+    payload, status = run_trade_outcome_check()
+    return jsonify(payload), status
 
 
 if __name__ == "__main__":

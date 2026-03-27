@@ -504,6 +504,12 @@ tbody tr:hover{background:#eef4ff}
     <input class="modal-inp" type="number" id="tradeBuyPrice" placeholder="Enter your buy price" min="0.01" step="0.05" autocomplete="off">
     <label class="modal-lbl" for="tradeQty">Quantity (shares)</label>
     <input class="modal-inp" type="number" id="tradeQty" placeholder="Number of shares to buy" min="1" step="1" autocomplete="off">
+    <label class="modal-lbl" for="tradeTarget1">Target 1 (₹)</label>
+    <input class="modal-inp" type="number" id="tradeTarget1" placeholder="Primary target price" min="0.01" step="0.05" autocomplete="off">
+    <label class="modal-lbl" for="tradeTarget2">Target 2 (₹)</label>
+    <input class="modal-inp" type="number" id="tradeTarget2" placeholder="Stretch target price" min="0.01" step="0.05" autocomplete="off">
+    <label class="modal-lbl" for="tradeStopLoss">Stop Loss (₹)</label>
+    <input class="modal-inp" type="number" id="tradeStopLoss" placeholder="Stop loss price" min="0.01" step="0.05" autocomplete="off">
     <div class="modal-err" id="tradeErr"></div>
     <div style="display:flex;gap:8px;margin-top:4px">
       <button class="btn btn-g" onclick="closeTradeModal()" style="flex:1">Cancel</button>
@@ -1607,6 +1613,7 @@ function openTradeModal(sym,fromActive=false){
     sig:r.signal||"BUY",
     price:+(r.entry_price||0),
     t1:+(r.target1||0),
+    t2:+(r.target2||0),
     sl:+(r.stop_loss||0),
     buy_range_low:+(r.buy_range_low||0),
     buy_range_high:+(r.buy_range_high||0),
@@ -1622,6 +1629,9 @@ function openTradeModal(sym,fromActive=false){
   document.getElementById("tradeModalInfo").textContent=info;
   document.getElementById("tradeBuyPrice").value=_tradeTarget.price||"";
   document.getElementById("tradeQty").value=_tradeTarget.shares_20k||Math.floor(20000/(_tradeTarget.price||1));
+  document.getElementById("tradeTarget1").value=_tradeTarget.t1||"";
+  document.getElementById("tradeTarget2").value=_tradeTarget.t2||"";
+  document.getElementById("tradeStopLoss").value=_tradeTarget.sl||"";
   document.getElementById("tradeErr").textContent="";
   document.getElementById("tradeModal").style.display="flex";
 }
@@ -1637,16 +1647,23 @@ async function submitTrade(){
   if(!_tradeTarget)return;
   const buyPrice=parseFloat(document.getElementById("tradeBuyPrice").value);
   const qty=parseInt(document.getElementById("tradeQty").value);
+  const target1=parseFloat(document.getElementById("tradeTarget1").value);
+  const target2=parseFloat(document.getElementById("tradeTarget2").value);
+  const stopLoss=parseFloat(document.getElementById("tradeStopLoss").value);
   const errEl=document.getElementById("tradeErr");
   if(!buyPrice||buyPrice<=0){errEl.textContent="Enter a valid buy price.";return;}
   if(!qty||qty<=0){errEl.textContent="Enter a valid quantity.";return;}
+  if(!target1||target1<=buyPrice){errEl.textContent="Target 1 must be greater than entry price.";return;}
+  if(!target2||target2<target1){errEl.textContent="Target 2 must be greater than or equal to Target 1.";return;}
+  if(!stopLoss||stopLoss>=buyPrice){errEl.textContent="Stop loss must be below entry price.";return;}
   const btn=document.getElementById("tradeSubmitBtn");
   btn.disabled=true;btn.textContent="Saving…";errEl.textContent="";
   const row={..._tradeTarget,price:buyPrice,shares_20k:qty,force_entry_update:true,
     buy_range_low:_tradeTarget.buy_range_low||round2(buyPrice*0.99),
     buy_range_high:_tradeTarget.buy_range_high||round2(buyPrice*1.01),
-    t1:_tradeTarget.t1||round2(buyPrice*1.05),
-    sl:_tradeTarget.sl||round2(buyPrice*0.965),
+    t1:round2(target1),
+    t2:round2(target2),
+    sl:round2(stopLoss),
   };
   try{
     const r=await fetch(`${PROXY}/save-trades`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify([row])});
@@ -1660,7 +1677,10 @@ async function submitTrade(){
     }
     else errEl.textContent=d.error||"Save failed — is Supabase configured?";
   }catch(e){errEl.textContent="Network error.";}
-  finally{btn.disabled=false;btn.textContent="✓ Register Trade";}
+  finally{
+    btn.disabled=false;
+    btn.textContent=_tradeMode==="edit"?"✓ Update Trade":"✓ Register Trade";
+  }
 }
 function round2(x){return Math.round(x*100)/100;}
 
@@ -1727,7 +1747,7 @@ function renderActiveTrades(open,prices,failed=[]){
         </div>
       </div>
       <div class="at-actions">
-        <button class="btn btn-g" style="font-size:10px;padding:4px 8px" onclick="openTradeEditModal('${t.symbol}')">Edit Entry</button>
+        <button class="btn btn-g" style="font-size:10px;padding:4px 8px" onclick="openTradeEditModal('${t.symbol}')">Edit Trade</button>
       </div>
       <div class="at-pnl at-pnl-card ${pnlCls}">
         <span>${pnlStr}</span>
