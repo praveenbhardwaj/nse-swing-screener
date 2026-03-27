@@ -82,8 +82,9 @@ except Exception as _sb_err:
     print(f"[Supabase] Not configured — {_sb_err}")
 
 # ── GROWW CREDENTIALS ────────────────────────────────────────────────
-API_KEY    = "eyJraWQiOiJaTUtjVXciLCJhbGciOiJFUzI1NiJ9.eyJleHAiOjI1NjI3NzIwMzUsImlhdCI6MTc3NDM3MjAzNSwibmJmIjoxNzc0MzcyMDM1LCJzdWIiOiJ7XCJ0b2tlblJlZklkXCI6XCJmOGYyNmQ3YS05ZWU5LTQ3OTMtYjhlNi03YjQ1MDJmMTQwODJcIixcInZlbmRvckludGVncmF0aW9uS2V5XCI6XCJlMzFmZjIzYjA4NmI0MDZjODg3NGIyZjZkODQ5NTMxM1wiLFwidXNlckFjY291bnRJZFwiOlwiMGFlMDJiYmMtMjdhOS00OGQ3LWFjNWUtZjkxODA0ZTlhMDc1XCIsXCJkZXZpY2VJZFwiOlwiODZkZjhkOTYtMTU1Ni01MjkxLTk2YTgtOTZkN2U4MzgwZmM0XCIsXCJzZXNzaW9uSWRcIjpcImYzNGFkZjMyLTcxNTMtNDg4MS04MjY4LThkOTQ3YzYyY2M1ZFwiLFwiYWRkaXRpb25hbERhdGFcIjpcIno1NC9NZzltdjE2WXdmb0gvS0EwYklUT2hnRmFrdHd6V21OL0FPUDFwdkJSTkczdTlLa2pWZDNoWjU1ZStNZERhWXBOVi9UOUxIRmtQejFFQisybTdRPT1cIixcInJvbGVcIjpcImF1dGgtdG90cFwiLFwic291cmNlSXBBZGRyZXNzXCI6XCIyNDAxOjQ5MDA6MWM1YzpiOTYwOjhkNzg6YTNkYTphYmY5OjEwMTgsMTcyLjY5LjIwMy4zNiwzNS4yNDEuMjMuMTIzXCIsXCJ0d29GYUV4cGlyeVRzXCI6MjU2Mjc3MjAzNTc4NixcInZlbmRvck5hbWVcIjpcImdyb3d3QXBpXCJ9IiwiaXNzIjoiYXBleC1hdXRoLXByb2QtYXBwIn0.12dGLN64_um4ggPlAxG9l958Qbc7o9qx61E9sH7R91cy7_bsbSQrxYlj7-itxd28RQ3yoCVr83NbyTuon76_Cw"
-API_SECRET = "w-Op1u#i8^sgwL1cYfuK2Lb9ee12qGwu"
+# Keep credentials out of source; load from env if available.
+API_KEY    = os.environ.get("GROWW_API_KEY", "").strip()
+API_SECRET = os.environ.get("GROWW_API_SECRET", "").strip()
 BASE_URL   = "https://api.groww.in/v1"
 
 app = Flask(__name__)
@@ -97,6 +98,36 @@ _cred_lock = threading.Lock()
 def generate_checksum(secret, timestamp):
     return hashlib.sha256((secret + timestamp).encode()).hexdigest()
 
+def _token_error_details(resp):
+    try:
+        payload = resp.json()
+    except Exception:
+        payload = {"raw": (resp.text or "")[:400]}
+    return {
+        "status_code": resp.status_code,
+        "payload": payload,
+    }
+
+def _request_access_token(key, secret):
+    if not key or not secret:
+        return None, {"message": "Missing API key/secret"}
+    ts = str(int(time.time()))
+    try:
+        resp = requests.post(
+            f"{BASE_URL}/token/api/access",
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json={"key_type": "approval", "checksum": generate_checksum(secret, ts), "timestamp": ts},
+            timeout=10)
+    except Exception as e:
+        return None, {"message": "Token request failed", "detail": str(e)}
+    details = _token_error_details(resp)
+    payload = details.get("payload") or {}
+    token = payload.get("token")
+    if token:
+        return token, None
+    details["message"] = "Groww token endpoint rejected credentials"
+    return None, details
+
 def get_access_token(force=False):
     global _access_token, _token_fetched_at
     if _access_token and not force and (time.time() - _token_fetched_at) < 14400:
@@ -104,18 +135,12 @@ def get_access_token(force=False):
     with _cred_lock:
         key = _session_api_key or API_KEY
         secret = _session_api_secret or API_SECRET
-    ts = str(int(time.time()))
-    resp = requests.post(
-        f"{BASE_URL}/token/api/access",
-        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-        json={"key_type": "approval", "checksum": generate_checksum(secret, ts), "timestamp": ts},
-        timeout=10)
-    d = resp.json()
-    if "token" in d:
-        _access_token, _token_fetched_at = d["token"], time.time()
+    tok, err = _request_access_token(key, secret)
+    if tok:
+        _access_token, _token_fetched_at = tok, time.time()
         print("[Auth] Token refreshed OK")
         return _access_token
-    print(f"[Auth] Token fetch failed: {d}")
+    print(f"[Auth] Token fetch failed: {err}")
     return None
 
 def groww_headers():
@@ -1341,19 +1366,27 @@ def market_data_route():
 
 @app.route("/set-credentials", methods=["POST"])
 def set_credentials():
-    global _session_api_key, _session_api_secret, _access_token
+    global _session_api_key, _session_api_secret, _access_token, _token_fetched_at
     data   = request.get_json(silent=True) or {}
     key    = data.get("api_key", "").strip()
     secret = data.get("api_secret", "").strip()
     if not key or not secret:
         return jsonify({"ok": False, "error": "api_key and api_secret required"}), 400
-    with _cred_lock:
-        _session_api_key = key; _session_api_secret = secret; _access_token = None
-    tok = get_access_token(force=True)
-    if tok: return jsonify({"ok": True})
+    tok, err = _request_access_token(key, secret)
+    if tok:
+        with _cred_lock:
+            _session_api_key = key
+            _session_api_secret = secret
+            _access_token = tok
+            _token_fetched_at = time.time()
+        return jsonify({"ok": True})
     with _cred_lock:
         _session_api_key = None; _session_api_secret = None
-    return jsonify({"ok": False, "error": "Groww rejected credentials"}), 401
+    return jsonify({
+        "ok": False,
+        "error": "Groww rejected credentials",
+        "details": err or {},
+    }), 401
 
 @app.route("/save-trades", methods=["POST"])
 def save_trades():
