@@ -1648,79 +1648,45 @@ def run_trade_outcome_check():
     upd_lock = threading.Lock()
     today = pd.Timestamp.now().normalize()
 
-    # First pass: use latest LTP to catch live/session hits quickly.
-    try:
-        symbols = sorted({t.get("symbol") for t in open_trades if t.get("symbol")})
-        ltp_prices, _ = _fetch_ltp_batch(symbols)
-    except Exception:
-        ltp_prices = {}
-
-    for trade in open_trades:
-        try:
-            tid = trade.get("id")
-            sym = trade.get("symbol")
-            if not tid or not sym:
-                continue
-            t1 = float(trade["target1"])
-            sl = float(trade["stop_loss"])
-            ltp = float((ltp_prices.get(sym, {}) or {}).get("ltp") or 0)
-            if ltp <= 0:
-                continue
-            entry_ts = trade.get("entry_date") or trade.get("entered_at") or trade.get("scanned_at", "")
-            if entry_ts:
-                days_to_outcome = max((today.date() - pd.Timestamp(entry_ts).date()).days + 1, 1)
-            else:
-                days_to_outcome = 1
-            # Keep SL precedence over target on ambiguous ticks.
-            if ltp <= sl:
-                updates_by_id[tid] = {
-                    "id": tid,
-                    "status": "sl_hit",
-                    "outcome_price": sl,
-                    "outcome_date": today.date().isoformat(),
-                    "days_to_outcome": days_to_outcome,
-                }
-            elif ltp >= t1:
-                updates_by_id[tid] = {
-                    "id": tid,
-                    "status": "target_hit",
-                    "outcome_price": t1,
-                    "outcome_date": today.date().isoformat(),
-                    "days_to_outcome": days_to_outcome,
-                }
-        except Exception:
-            continue
-
     def check_one(trade):
+        """Historical OHLC check: entry day through yesterday (today exclusive).
+
+        entry_date / entered_at = actual purchase date → check from that day.
+        scanned_at only (EOD signal) → actual entry is next trading day, so
+        start from scanned_at + 1 calendar day to avoid false hits on the
+        scan-day candle (before the trade was entered).
+        """
         try:
             sym = trade.get("symbol")
             tid = trade.get("id")
             if not sym or not tid:
                 return
-            if tid in updates_by_id:
-                return
             t1 = float(trade["target1"])
             sl = float(trade["stop_loss"])
             if t1 <= 0 or sl <= 0:
                 return
-            entry_ts = trade.get("entry_date") or trade.get("entered_at") or trade.get("scanned_at", "")
-            if not entry_ts:
-                return
-            entry_day = pd.Timestamp(entry_ts).normalize()
-            # Include entry day to avoid missing same-day SL/target hits.
-            start = entry_day
-            if start > today:
+            explicit_entry = trade.get("entry_date") or trade.get("entered_at")
+            if explicit_entry:
+                entry_day = pd.Timestamp(explicit_entry).normalize()
+            else:
+                scan_ts = trade.get("scanned_at", "")
+                if not scan_ts:
+                    return
+                # EOD scan → actual holding starts the next calendar day.
+                entry_day = (pd.Timestamp(scan_ts) + pd.Timedelta(days=1)).normalize()
+            # end is exclusive in yfinance – passing today gives candles up to yesterday.
+            if entry_day >= today:
                 return
             df = yf.Ticker(f"{sym}.NS").history(
-                start=start.strftime("%Y-%m-%d"),
-                end=(today + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
+                start=entry_day.strftime("%Y-%m-%d"),
+                end=today.strftime("%Y-%m-%d"),
                 interval="1d", auto_adjust=True)
             if df is None or df.empty:
                 return
-            for i, (dt, row) in enumerate(df.iterrows()):
+            for dt, row in df.iterrows():
                 low = float(row["Low"])
                 high = float(row["High"])
-                # Keep SL precedence if both levels are touched in a single candle.
+                # SL takes precedence if both levels touched in a single candle.
                 if low <= sl:
                     with upd_lock:
                         updates_by_id[tid] = {"id": tid, "status": "sl_hit",
@@ -1738,11 +1704,59 @@ def run_trade_outcome_check():
         except Exception as e:
             print(f"[check_one] {trade.get('symbol','?')}: {e}")
 
+    # Pass 1: Historical OHLC (entry → yesterday).  Must run first so accurate
+    # past outcomes take priority over today's live LTP in Pass 2.
     try:
         with ThreadPoolExecutor(max_workers=10) as ex:
             list(ex.map(check_one, open_trades))
     except Exception as e:
         return {"ok": False, "error": f"ThreadPool: {e}"}, 500
+
+    # Pass 2: Live LTP check – only for trades not resolved by historical data.
+    # Catches today's intraday SL/target hits that yfinance doesn't yet have.
+    remaining = [t for t in open_trades if t.get("id") not in updates_by_id]
+    if remaining:
+        try:
+            symbols = sorted({t.get("symbol") for t in remaining if t.get("symbol")})
+            ltp_prices, _ = _fetch_ltp_batch(symbols)
+        except Exception:
+            ltp_prices = {}
+
+        for trade in remaining:
+            try:
+                tid = trade.get("id")
+                sym = trade.get("symbol")
+                if not tid or not sym:
+                    continue
+                t1 = float(trade["target1"])
+                sl = float(trade["stop_loss"])
+                ltp = float((ltp_prices.get(sym, {}) or {}).get("ltp") or 0)
+                if ltp <= 0:
+                    continue
+                entry_ts = trade.get("entry_date") or trade.get("entered_at") or trade.get("scanned_at", "")
+                if entry_ts:
+                    days_to_outcome = max((today.date() - pd.Timestamp(entry_ts).date()).days + 1, 1)
+                else:
+                    days_to_outcome = 1
+                # Keep SL precedence over target on ambiguous ticks.
+                if ltp <= sl:
+                    updates_by_id[tid] = {
+                        "id": tid,
+                        "status": "sl_hit",
+                        "outcome_price": sl,
+                        "outcome_date": today.date().isoformat(),
+                        "days_to_outcome": days_to_outcome,
+                    }
+                elif ltp >= t1:
+                    updates_by_id[tid] = {
+                        "id": tid,
+                        "status": "target_hit",
+                        "outcome_price": t1,
+                        "outcome_date": today.date().isoformat(),
+                        "days_to_outcome": days_to_outcome,
+                    }
+            except Exception:
+                continue
 
     updates = list(updates_by_id.values())
     for upd in updates:
