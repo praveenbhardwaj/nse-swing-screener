@@ -1272,6 +1272,8 @@ def _fetch_ltp_batch(symbols):
                     if ltp:
                         prices[sym] = {
                             "ltp": float(ltp),
+                            "day_high": float(p.get("high_price") or p.get("day_high") or ltp),
+                            "day_low": float(p.get("low_price") or p.get("day_low") or ltp),
                             "change": round(p.get("day_change") or 0, 2),
                             "change_pct": round(p.get("day_change_perc") or 0, 2),
                             "source": "groww",
@@ -1287,19 +1289,20 @@ def _fetch_ltp_batch(symbols):
             try:
                 hist = yf.Ticker(f"{sym}.NS").history(period="5d", interval="1d", auto_adjust=True)
                 if hist is not None and not hist.empty:
-                    closes = hist["Close"].dropna().values.astype(float)
-                    if len(closes):
-                        ltp = float(closes[-1])
-                        prev = float(closes[-2]) if len(closes) > 1 else ltp
-                        chg = ltp - prev
-                        chg_pct = (chg / prev * 100) if prev else 0.0
-                        prices[sym] = {
-                            "ltp": round(ltp, 2),
-                            "change": round(chg, 2),
-                            "change_pct": round(chg_pct, 2),
-                            "source": "yfinance",
-                        }
-                        got = True
+                    last = hist.iloc[-1]
+                    ltp = float(last["Close"])
+                    prev_close = float(hist.iloc[-2]["Close"]) if len(hist) > 1 else ltp
+                    chg = ltp - prev_close
+                    chg_pct = (chg / prev_close * 100) if prev_close else 0.0
+                    prices[sym] = {
+                        "ltp": round(ltp, 2),
+                        "day_high": round(float(last["High"]), 2),
+                        "day_low": round(float(last["Low"]), 2),
+                        "change": round(chg, 2),
+                        "change_pct": round(chg_pct, 2),
+                        "source": "yfinance",
+                    }
+                    got = True
             except Exception:
                 pass
         if not got:
@@ -1730,16 +1733,21 @@ def run_trade_outcome_check():
                     continue
                 t1 = float(trade["target1"])
                 sl = float(trade["stop_loss"])
-                ltp = float((ltp_prices.get(sym, {}) or {}).get("ltp") or 0)
+                quote = ltp_prices.get(sym) or {}
+                ltp = float(quote.get("ltp") or 0)
                 if ltp <= 0:
                     continue
+                # Use intraday high/low so a T1/SL touch during the day is
+                # caught even when the current price has since moved away.
+                day_high = float(quote.get("day_high") or ltp)
+                day_low = float(quote.get("day_low") or ltp)
                 entry_ts = trade.get("entry_date") or trade.get("entered_at") or trade.get("scanned_at", "")
                 if entry_ts:
                     days_to_outcome = max((today.date() - pd.Timestamp(entry_ts).date()).days + 1, 1)
                 else:
                     days_to_outcome = 1
-                # Keep SL precedence over target on ambiguous ticks.
-                if ltp <= sl:
+                # SL takes precedence if both levels were touched today.
+                if day_low <= sl:
                     updates_by_id[tid] = {
                         "id": tid,
                         "status": "sl_hit",
@@ -1747,7 +1755,7 @@ def run_trade_outcome_check():
                         "outcome_date": today.date().isoformat(),
                         "days_to_outcome": days_to_outcome,
                     }
-                elif ltp >= t1:
+                elif day_high >= t1:
                     updates_by_id[tid] = {
                         "id": tid,
                         "status": "target_hit",
