@@ -1529,6 +1529,9 @@ def save_trades():
                 _sb.table("trades").update(payload).eq("id", existing[0]["id"]).execute()
                 updated += 1
             else:
+                # Stamp the exact entry time so holding-period OHLC checks
+                # know precisely when the trade was initiated.
+                payload["scanned_at"] = pd.Timestamp.now().isoformat()
                 _sb.table("trades").insert([payload]).execute()
                 inserted += 1
         except Exception as e:
@@ -1689,20 +1692,22 @@ def run_trade_outcome_check():
             for dt, row in df.iterrows():
                 low = float(row["Low"])
                 high = float(row["High"])
-                # SL takes precedence if both levels touched in a single candle.
-                if low <= sl:
-                    with upd_lock:
-                        updates_by_id[tid] = {"id": tid, "status": "sl_hit",
-                                              "outcome_price": sl,
-                                              "outcome_date": dt.date().isoformat(),
-                                              "days_to_outcome": max((dt.date() - entry_day.date()).days + 1, 1)}
-                    break
+                days = max((dt.date() - entry_day.date()).days + 1, 1)
+                # Target takes precedence: if both T1 and SL were touched on
+                # the same candle, assume the limit-sell at T1 was filled first.
                 if high >= t1:
                     with upd_lock:
                         updates_by_id[tid] = {"id": tid, "status": "target_hit",
                                               "outcome_price": t1,
                                               "outcome_date": dt.date().isoformat(),
-                                              "days_to_outcome": max((dt.date() - entry_day.date()).days + 1, 1)}
+                                              "days_to_outcome": days}
+                    break
+                if low <= sl:
+                    with upd_lock:
+                        updates_by_id[tid] = {"id": tid, "status": "sl_hit",
+                                              "outcome_price": sl,
+                                              "outcome_date": dt.date().isoformat(),
+                                              "days_to_outcome": days}
                     break
         except Exception as e:
             print(f"[check_one] {trade.get('symbol','?')}: {e}")
@@ -1733,6 +1738,19 @@ def run_trade_outcome_check():
                     continue
                 t1 = float(trade["target1"])
                 sl = float(trade["stop_loss"])
+                # Determine the first day the trade is actually in the holding
+                # period so we don't check today's range for a trade that will
+                # only be entered tomorrow (EOD-scan → next-day entry).
+                explicit_entry = trade.get("entry_date") or trade.get("entered_at")
+                if explicit_entry:
+                    actual_entry_day = pd.Timestamp(explicit_entry).normalize()
+                else:
+                    scan_ts = trade.get("scanned_at", "")
+                    if not scan_ts:
+                        continue
+                    actual_entry_day = (pd.Timestamp(scan_ts) + pd.Timedelta(days=1)).normalize()
+                if actual_entry_day > today:
+                    continue  # not entered yet; skip today's intraday check
                 quote = ltp_prices.get(sym) or {}
                 ltp = float(quote.get("ltp") or 0)
                 if ltp <= 0:
@@ -1741,25 +1759,22 @@ def run_trade_outcome_check():
                 # caught even when the current price has since moved away.
                 day_high = float(quote.get("day_high") or ltp)
                 day_low = float(quote.get("day_low") or ltp)
-                entry_ts = trade.get("entry_date") or trade.get("entered_at") or trade.get("scanned_at", "")
-                if entry_ts:
-                    days_to_outcome = max((today.date() - pd.Timestamp(entry_ts).date()).days + 1, 1)
-                else:
-                    days_to_outcome = 1
-                # SL takes precedence if both levels were touched today.
-                if day_low <= sl:
-                    updates_by_id[tid] = {
-                        "id": tid,
-                        "status": "sl_hit",
-                        "outcome_price": sl,
-                        "outcome_date": today.date().isoformat(),
-                        "days_to_outcome": days_to_outcome,
-                    }
-                elif day_high >= t1:
+                days_to_outcome = max((today.date() - actual_entry_day.date()).days + 1, 1)
+                # Target takes precedence: if both T1 and SL touched today,
+                # assume the limit-sell at T1 was filled first.
+                if day_high >= t1:
                     updates_by_id[tid] = {
                         "id": tid,
                         "status": "target_hit",
                         "outcome_price": t1,
+                        "outcome_date": today.date().isoformat(),
+                        "days_to_outcome": days_to_outcome,
+                    }
+                elif day_low <= sl:
+                    updates_by_id[tid] = {
+                        "id": tid,
+                        "status": "sl_hit",
+                        "outcome_price": sl,
                         "outcome_date": today.date().isoformat(),
                         "days_to_outcome": days_to_outcome,
                     }

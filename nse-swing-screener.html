@@ -482,6 +482,31 @@ tbody tr:hover{background:#eef4ff}
   font-size:10px;
   padding:12px 14px;
 }
+
+/* Period pills */
+.period-pills{display:flex;gap:6px;flex-wrap:wrap}
+.period-pill{border:1px solid var(--border);background:var(--white);padding:4px 12px;border-radius:20px;font-size:11px;font-weight:600;color:var(--sub);cursor:pointer;transition:all .15s}
+.period-pill:hover{background:var(--accent-lt);color:var(--accent);border-color:var(--accent-br)}
+.period-pill.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+
+/* Stat cards — coloured left border */
+.stat-card{border-left:3px solid var(--accent)}
+.stat-card.green{border-left-color:var(--green)}
+.stat-card.red{border-left-color:var(--red)}
+
+/* Section header row */
+.section-hdr{display:flex;align-items:center;justify-content:space-between;margin:18px 0 10px;gap:10px;flex-wrap:wrap}
+.section-ttl{font-size:14px;font-weight:700;color:var(--text)}
+
+/* KPI card hover lift */
+.kpi-card{transition:box-shadow .2s,transform .2s}
+.kpi-card:hover{box-shadow:var(--shadow-lg);transform:translateY(-1px)}
+
+/* Tab icons in sidebar */
+.side-btn{display:flex;align-items:center;gap:8px}
+
+/* Inline analytics row */
+.inline-analytics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:16px}
 </style>
 </head>
 <body>
@@ -548,14 +573,14 @@ tbody tr:hover{background:#eef4ff}
     </div>
   </div>
   <div class="side-nav">
-    <button class="side-btn active" id="tabBtnOverview" onclick="switchTab('overview')">Overview</button>
-    <button class="side-btn" id="tabBtnPortfolio" onclick="switchTab('portfolio')">Portfolio</button>
-    <button class="side-btn" id="tabBtnWatchlists" onclick="switchTab('watchlists')">Watchlists</button>
-    <button class="side-btn" id="tabBtnAnalytics" onclick="switchTab('analytics')">Analytics</button>
-    <button class="side-btn" id="tabBtnReports" onclick="switchTab('reports')">Reports</button>
-    <button class="side-btn" id="tabBtnHistory" onclick="switchTab('history')">History</button>
+    <button class="side-btn active" id="tabBtnScreener" onclick="switchTab('screener')">📡 Screener</button>
+    <button class="side-btn" id="tabBtnPortfolio" onclick="switchTab('portfolio')">⚡ Live Portfolio</button>
+    <button class="side-btn" id="tabBtnHistory" onclick="switchTab('history')">📊 History &amp; Analytics</button>
   </div>
-  <div class="side-footer">Research dashboard · live market sync</div>
+  <div class="side-footer" style="margin-top:auto;padding:12px 8px 2px;font-size:10px;color:var(--muted);display:flex;align-items:center;justify-content:space-between">
+    <span>Stockvest</span>
+    <span style="background:var(--accent-lt);color:var(--accent);border:1px solid var(--accent-br);padding:1px 7px;border-radius:20px;font-size:9px;font-weight:700">v2.0</span>
+  </div>
 </aside>
 <main class="main">
   <div class="topbar">
@@ -567,52 +592,8 @@ tbody tr:hover{background:#eef4ff}
     </div>
   </div>
 
-<!-- ═══════════════ OVERVIEW TAB ═══════════════ -->
-<div id="tab-overview" class="view active">
-  <div class="kpi-grid" id="overviewKpis">
-    <div class="kpi-card"><div class="kpi-lbl">Total Portfolio Value</div><div class="kpi-val">₹0</div><div class="kpi-sub">Loading summary...</div></div>
-  </div>
-  <div class="module-grid">
-    <div class="tcard" style="padding:14px">
-      <div class="tcount">Live Updates</div>
-      <div class="mini-note" id="overviewInsight">Syncing active positions and performance metrics.</div>
-      <div id="overviewBars" style="height:170px;display:flex;align-items:flex-end;gap:8px;margin-top:14px"></div>
-    </div>
-    <div class="tcard" style="padding:14px">
-      <div class="tcount">Sector Allocation</div>
-      <div class="alloc-list" id="allocationList"></div>
-    </div>
-  </div>
-</div>
-
-<!-- ═══════════════ PORTFOLIO TAB ═══════════════ -->
-<div id="tab-portfolio" class="view">
-  <div class="tcard" style="padding:14px;margin-top:14px">
-    <div class="tbar" style="padding:0 0 10px 0;border:none">
-      <div class="tcount">Active Holdings</div>
-      <button class="btn btn-g" onclick="loadPortfolioSummary()">↻ Refresh Holdings</button>
-    </div>
-    <div id="portfolioTableWrap"></div>
-  </div>
-  <div id="portfolioModuleRoot"></div>
-</div>
-
-<!-- ═══════════════ WATCHLISTS TAB ═══════════════ -->
-<div id="tab-watchlists" class="view">
-<div id="tab-screener">
-
-<!-- ACTIVE TRADES PANEL -->
-<div class="active-trades" id="activeTrades">
-  <div class="at-hdr">
-    <span class="at-ttl">⚡ Active Trades</span>
-    <span class="at-count" id="activeTradeCount">0</span>
-    <span class="at-live"><span class="at-live-dot"></span>Live 10s</span>
-    <span class="at-warn" id="activeTradeWarn" style="display:none">LTP unavailable for 0</span>
-    <span class="at-sym-sub" id="activeTradeUpdatedAt">Last updated —</span>
-    <button class="btn btn-g" style="font-size:11px;padding:4px 10px;margin-left:auto" onclick="refreshActivePnL()">↻ Refresh P&L</button>
-  </div>
-  <div class="at-list" id="activeTradeList"></div>
-</div>
+<!-- ═══════════════ SCREENER TAB ═══════════════ -->
+<div id="tab-screener" class="view active">
 
 <!-- PROXY STATUS -->
 <div class="proxy-banner proxy-check" id="proxyBanner">
@@ -802,65 +783,98 @@ tbody tr:hover{background:#eef4ff}
 <div class="disc">⚠ EDUCATIONAL & RESEARCH PURPOSES ONLY — Not SEBI-registered advice. Data from Yahoo Finance. Validate independently. Capital at risk. Always use stop losses.</div>
 
 </div><!-- end tab-screener -->
-</div>
 
-<!-- ═══════════════ ANALYTICS TAB ═══════════════ -->
-<div id="tab-analytics" class="view">
-  <div class="kpi-grid" id="analyticsKpis"></div>
+<!-- ═══════════════ LIVE PORTFOLIO TAB ═══════════════ -->
+<div id="tab-portfolio" class="view">
+  <!-- KPI row -->
+  <div class="kpi-grid" id="portfolioKpis" style="margin-top:14px">
+    <div class="kpi-card"><div class="kpi-lbl">Total Portfolio Value</div><div class="kpi-val">₹0</div><div class="kpi-sub">Loading…</div></div>
+  </div>
+
+  <!-- Active Trades hero -->
+  <div class="active-trades" id="activeTrades">
+    <div class="at-hdr">
+      <span class="at-ttl">⚡ Active Trades</span>
+      <span class="at-count" id="activeTradeCount">0</span>
+      <span class="at-live"><span class="at-live-dot"></span>Live 10s</span>
+      <span class="at-warn" id="activeTradeWarn" style="display:none">LTP unavailable for 0</span>
+      <span class="at-sym-sub" id="activeTradeUpdatedAt">Last updated —</span>
+      <button class="btn btn-g" style="font-size:11px;padding:4px 10px;margin-left:auto" onclick="refreshActivePnL()">↻ Refresh P&amp;L</button>
+    </div>
+    <div class="at-list" id="activeTradeList"></div>
+  </div>
+
+  <!-- Holdings + Allocation -->
   <div class="module-grid">
     <div class="tcard" style="padding:14px">
-      <div class="tcount">Signal Distribution</div>
-      <div id="signalMix" class="mini-note">Run screener or refresh data to view distribution.</div>
+      <div class="tbar" style="padding:0 0 10px 0;border:none">
+        <div class="tcount">Active Holdings</div>
+        <button class="btn btn-g" onclick="loadPortfolioSummary()">↻ Refresh</button>
+      </div>
+      <div id="portfolioTableWrap"></div>
     </div>
     <div class="tcard" style="padding:14px">
-      <div class="tcount">Risk Snapshot</div>
-      <div id="riskMix" class="mini-note">Risk profile will appear after data sync.</div>
+      <div class="tcount">Sector Allocation</div>
+      <div class="alloc-list" id="allocationList"></div>
     </div>
   </div>
+  <div id="portfolioModuleRoot"></div>
 </div>
 
-<!-- ═══════════════ HISTORY TAB ═══════════════ -->
+<!-- ═══════════════ HISTORY & ANALYTICS TAB ═══════════════ -->
 <div id="tab-history" class="view">
-  <div class="cbar">
-    <span class="clbl">Signal</span>
-    <select id="hSigF" onchange="renderHistory()">
-      <option value="all">All</option>
-      <option value="STRONG BUY">Strong Buy</option>
-      <option value="BUY">Buy</option>
-    </select>
-    <span class="clbl">Sector</span>
-    <select id="hSecF" onchange="renderHistory()">
-      <option value="all">All Sectors</option>
-    </select>
-    <span class="clbl">Status</span>
-    <select id="hStatusF" onchange="renderHistory()">
-      <option value="all">All</option>
-      <option value="open">Open</option>
-      <option value="target_hit">Target Hit</option>
-      <option value="sl_hit">SL Hit</option>
-      <option value="expired">Expired</option>
-    </select>
-    <div class="sp"></div>
-    <button class="btn btn-g" onclick="loadHistory()">↻ Refresh</button>
-    <button class="btn btn-p" id="checkOutcomesBtn" onclick="checkOutcomes()">⚡ Check Outcomes</button>
+  <!-- Period pills + filter bar -->
+  <div class="section-hdr" style="margin-top:14px">
+    <div class="period-pills">
+      <button class="period-pill active" data-days="">All Time</button>
+      <button class="period-pill" data-days="7">1W</button>
+      <button class="period-pill" data-days="15">15D</button>
+      <button class="period-pill" data-days="30">1M</button>
+      <button class="period-pill" data-days="90">3M</button>
+    </div>
+    <div class="cbar" style="margin:0;flex:1;min-width:0">
+      <span class="clbl">Signal</span>
+      <select id="hSigF" onchange="renderHistory()">
+        <option value="all">All</option>
+        <option value="STRONG BUY">Strong Buy</option>
+        <option value="BUY">Buy</option>
+      </select>
+      <span class="clbl">Sector</span>
+      <select id="hSecF" onchange="renderHistory()">
+        <option value="all">All Sectors</option>
+      </select>
+      <span class="clbl">Status</span>
+      <select id="hStatusF" onchange="renderHistory()">
+        <option value="all">All</option>
+        <option value="open">Open</option>
+        <option value="target_hit">Target Hit</option>
+        <option value="sl_hit">SL Hit</option>
+        <option value="expired">Expired</option>
+      </select>
+      <div class="sp"></div>
+      <button class="btn btn-g" onclick="loadHistory()">↻ Refresh</button>
+      <button class="btn btn-p" id="checkOutcomesBtn" onclick="checkOutcomes()">⚡ Check Outcomes</button>
+    </div>
   </div>
+
+  <!-- Stat grid -->
   <div class="stat-grid" id="histStats"></div>
+
+  <!-- Inline analytics -->
+  <div class="inline-analytics" id="inlineAnalytics"></div>
+
+  <!-- History table -->
   <div class="tcard" id="histTable">
     <div class="empty"><div class="empty-ico">📋</div><div>No trades yet.</div></div>
   </div>
 </div>
 
-<!-- ═══════════════ REPORTS TAB ═══════════════ -->
-<div id="tab-reports" class="view">
-  <div class="tcard" style="padding:14px;margin-top:14px">
-    <div class="tcount">Reports</div>
-    <div class="mini-note">Export and snapshot modules for periodic review.</div>
-    <div class="report-grid" style="margin-top:12px">
-      <div class="kpi-card"><div class="kpi-lbl">Monthly Snapshot</div><div class="kpi-sub" id="reportSnapshot">Generate summary from current trade history.</div></div>
-      <div class="kpi-card"><div class="kpi-lbl">Open Positions</div><div class="kpi-val" id="reportOpenCount">0</div><div class="kpi-sub">Live in portfolio</div></div>
-      <div class="kpi-card"><div class="kpi-lbl">Actions</div><button class="btn btn-p" onclick="loadHistory()">Refresh History</button></div>
-    </div>
-  </div>
+<!-- placeholder deleted tab -->
+<div style="display:none" id="tab-overview"></div>
+<div style="display:none" id="tab-analytics"></div>
+<div style="display:none" id="tab-reports">
+  <div id="reportOpenCount" style="display:none">0</div>
+  <div id="reportSnapshot" style="display:none"></div>
 </div>
 
 </main>
@@ -902,11 +916,10 @@ window.addEventListener("load",async()=>{
   });
   const credsSet=sessionStorage.getItem("groww_creds_set")==="1";
   await checkProxy();
-  switchTab("overview");
+  switchTab("screener");
   fetchMarketData();
   loadUniverse();
   loadActiveTrades();
-  loadPortfolioSummary();
   if(typeof window.initPortfolioModule==="function")window.initPortfolioModule();
   if(!credsSet){
     showToast("Groww not connected. Running with Yahoo fallback.","info");
@@ -914,6 +927,14 @@ window.addEventListener("load",async()=>{
   document.addEventListener("visibilitychange",()=>{
     if(document.hidden)stopActivePnlAutoRefresh();
     else startActivePnlAutoRefresh();
+  });
+  // Period pill click handler
+  document.querySelectorAll(".period-pill").forEach(btn=>{
+    btn.addEventListener("click",()=>{
+      document.querySelectorAll(".period-pill").forEach(b=>b.classList.remove("active"));
+      btn.classList.add("active");
+      renderHistory();
+    });
   });
 });
 
@@ -1407,10 +1428,9 @@ async function loadPortfolioSummary(){
     const d=await r.json();
     if(!d.ok)return;
     portfolioSummary=d;
-    renderOverview();
+    renderPortfolioKpis();
     renderPortfolioHoldings();
-    renderAnalytics();
-    renderReports();
+    renderPortfolioAllocation();
   }catch(e){
     console.warn("[PortfolioSummary]",e);
   }
@@ -1420,25 +1440,23 @@ function money(v){
   return `₹${Number(v||0).toLocaleString("en-IN",{maximumFractionDigits:2})}`;
 }
 
-function renderOverview(){
+function renderPortfolioKpis(){
   const s=portfolioSummary.summary||{};
-  const kpis=document.getElementById("overviewKpis");
+  const kpis=document.getElementById("portfolioKpis");
+  if(!kpis)return;
   const pnlCls=(s.pnl_total||0)>=0?"var(--green)":"var(--red)";
   kpis.innerHTML=`
     <div class="kpi-card"><div class="kpi-lbl">Total Portfolio Value</div><div class="kpi-val">${money(s.portfolio_value)}</div><div class="kpi-sub">Invested ${money(s.invested_cost)}</div></div>
-    <div class="kpi-card"><div class="kpi-lbl">Today's P&L</div><div class="kpi-val" style="color:${pnlCls}">${money(s.pnl_total)}</div><div class="kpi-sub">${(s.pnl_pct_total||0)>0?"+":""}${Number(s.pnl_pct_total||0).toFixed(2)}% vs cost</div></div>
+    <div class="kpi-card"><div class="kpi-lbl">Today's P&amp;L</div><div class="kpi-val" style="color:${pnlCls}">${money(s.pnl_total)}</div><div class="kpi-sub">${(s.pnl_pct_total||0)>0?"+":""}${Number(s.pnl_pct_total||0).toFixed(2)}% vs cost</div></div>
     <div class="kpi-card"><div class="kpi-lbl">Open Positions</div><div class="kpi-val">${s.open_positions||0}</div><div class="kpi-sub">${s.closed_positions||0} closed in history</div></div>
     <div class="kpi-card"><div class="kpi-lbl">Win Rate</div><div class="kpi-val">${Number(s.win_rate||0).toFixed(1)}%</div><div class="kpi-sub">${s.wins||0} wins / ${s.losses||0} losses</div></div>
   `;
-  const insight=document.getElementById("overviewInsight");
-  insight.textContent=(s.open_positions||0)>0
-    ?`You have ${s.open_positions} active positions. Keep exposure balanced across sectors.`
-    :"No active positions yet. Run screener and register trades to build portfolio.";
-  const bars=document.getElementById("overviewBars");
-  const pts=(portfolioSummary.holdings||[]).slice(0,10).map((h)=>Math.max(8,Math.min(140,Math.abs(h.pnl_pct||0)*5+16)));
-  bars.innerHTML=pts.length?pts.map((h,i)=>`<div style="flex:1;height:${h}px;background:${i===pts.length-1?'#4338ca':'#c7d2fe'};border-radius:8px 8px 2px 2px"></div>`).join(""):`<div class="mini-note">No performance bars yet.</div>`;
+}
+
+function renderPortfolioAllocation(){
   const alloc=document.getElementById("allocationList");
-  alloc.innerHTML=(portfolioSummary.allocation||[]).slice(0,5).map(a=>`
+  if(!alloc)return;
+  alloc.innerHTML=(portfolioSummary.allocation||[]).slice(0,6).map(a=>`
     <div>
       <div class="alloc-row"><span>${a.sector}</span><strong>${a.weight}%</strong></div>
       <div class="alloc-bar"><div class="alloc-fill" style="width:${a.weight}%"></div></div>
@@ -1448,7 +1466,7 @@ function renderOverview(){
 function renderPortfolioHoldings(){
   const wrap=document.getElementById("portfolioTableWrap");
   const rows=portfolioSummary.holdings||[];
-  document.getElementById("reportOpenCount").textContent=rows.length;
+  const roc=document.getElementById("reportOpenCount");if(roc)roc.textContent=rows.length;
   if(!rows.length){
     wrap.innerHTML=`<div class="empty"><div class="empty-ico">📭</div><div>No holdings yet.</div></div>`;
     return;
@@ -1467,40 +1485,38 @@ function renderPortfolioHoldings(){
   </table></div>`;
 }
 
-function renderAnalytics(){
-  const a=document.getElementById("analyticsKpis");
+function renderAnalyticsInline(){
+  const el=document.getElementById("inlineAnalytics");
+  if(!el)return;
   const holdings=portfolioSummary.holdings||[];
   const pos=holdings.filter(h=>h.pnl>0).length;
   const neg=holdings.filter(h=>h.pnl<0).length;
-  const mix={sb:allResults.filter(r=>r.sig==="STRONG BUY").length,b:allResults.filter(r=>r.sig==="BUY").length,w:allResults.filter(r=>r.sig==="WATCH").length};
-  a.innerHTML=`
-    <div class="kpi-card"><div class="kpi-lbl">Positive Holdings</div><div class="kpi-val" style="color:var(--green)">${pos}</div></div>
-    <div class="kpi-card"><div class="kpi-lbl">Negative Holdings</div><div class="kpi-val" style="color:var(--red)">${neg}</div></div>
-    <div class="kpi-card"><div class="kpi-lbl">Scans Saved</div><div class="kpi-val">${historyData.length}</div></div>
-    <div class="kpi-card"><div class="kpi-lbl">Active Signals</div><div class="kpi-val">${mix.sb+mix.b+mix.w}</div></div>`;
-  document.getElementById("signalMix").textContent=`Strong Buy ${mix.sb} · Buy ${mix.b} · Watch ${mix.w}`;
-  document.getElementById("riskMix").textContent=`Risk ratio (negative/total): ${holdings.length?Math.round((neg/holdings.length)*100):0}%`;
+  const total=holdings.length;
+  const riskRatio=total?Math.round((neg/total)*100):0;
+  el.innerHTML=`
+    <div class="kpi-card"><div class="kpi-lbl">Positive Holdings</div><div class="kpi-val" style="color:var(--green)">${pos}</div><div class="kpi-sub">In profit</div></div>
+    <div class="kpi-card"><div class="kpi-lbl">Negative Holdings</div><div class="kpi-val" style="color:var(--red)">${neg}</div><div class="kpi-sub">In loss</div></div>
+    <div class="kpi-card"><div class="kpi-lbl">Risk Ratio</div><div class="kpi-val" style="color:${riskRatio>50?"var(--red)":"var(--amber)"}">${riskRatio}%</div><div class="kpi-sub">Loss positions / total</div></div>
+  `;
 }
 
-function renderReports(){
-  const s=portfolioSummary.summary||{};
-  document.getElementById("reportSnapshot").textContent=
-    `Portfolio ${money(s.portfolio_value)} · P&L ${money(s.pnl_total)} · Win rate ${Number(s.win_rate||0).toFixed(1)}%`;
-}
+// Kept as no-ops for any external callers
+function renderAnalytics(){}
+function renderReports(){}
 
 // ── TABS ──────────────────────────────────────────────────────
 function switchTab(name){
-  const tabs=["overview","portfolio","watchlists","analytics","reports","history"];
+  const tabs=["screener","portfolio","history"];
+  const btnMap={screener:"tabBtnScreener",portfolio:"tabBtnPortfolio",history:"tabBtnHistory"};
   tabs.forEach(tab=>{
     const el=document.getElementById(`tab-${tab}`);
     if(el)el.classList.toggle("active",tab===name);
-    const btn=document.getElementById(`tabBtn${tab[0].toUpperCase()+tab.slice(1)}`);
+    const btn=document.getElementById(btnMap[tab]);
     if(btn)btn.classList.toggle("active",tab===name);
   });
-  if(name==="watchlists")startActivePnlAutoRefresh(); else stopActivePnlAutoRefresh();
-  if(name==="portfolio"&&typeof window.initPortfolioModule==="function")window.initPortfolioModule();
+  if(name==="portfolio"){startActivePnlAutoRefresh();loadPortfolioSummary();}
+  else stopActivePnlAutoRefresh();
   if(name==="history"&&historyData.length===0)loadHistory();
-  if(["overview","portfolio","analytics","reports"].includes(name))loadPortfolioSummary();
 }
 
 // ── SAVE TRADES ───────────────────────────────────────────────
@@ -1527,8 +1543,6 @@ async function loadHistory(){
     hSecF.innerHTML='<option value="all">All Sectors</option>';
     sectors.forEach(s=>{const o=document.createElement("option");o.value=s;o.textContent=s;hSecF.appendChild(o);});
     renderHistory();
-    renderAnalytics();
-    renderReports();
   }catch(e){showToast("Network error loading history.","err");}
 }
 
@@ -1536,10 +1550,15 @@ function renderHistory(){
   const sigF=document.getElementById("hSigF").value;
   const secF=document.getElementById("hSecF").value;
   const statusF=document.getElementById("hStatusF").value;
+  const period=document.querySelector(".period-pill.active")?.dataset.days;
   histFiltered=historyData.filter(t=>{
     if(sigF!=="all"&&t.signal!==sigF)return false;
     if(secF!=="all"&&t.sector!==secF)return false;
     if(statusF!=="all"&&t.status!==statusF)return false;
+    if(period){
+      const cutoff=Date.now()-Number(period)*86400000;
+      if(!t.scanned_at||new Date(t.scanned_at).getTime()<cutoff)return false;
+    }
     return true;
   });
   const total=histFiltered.length;
@@ -1552,10 +1571,10 @@ function renderHistory(){
   const avgRR=rrVals.length>0?(rrVals.reduce((a,b)=>a+b,0)/rrVals.length).toFixed(2):"—";
   document.getElementById("histStats").innerHTML=`
     <div class="stat-card"><div class="stat-card-lbl">Total</div><div class="stat-card-val">${total}</div></div>
-    <div class="stat-card"><div class="stat-card-lbl">Win Rate</div><div class="stat-card-val" style="color:var(--green)">${winRate}%</div></div>
+    <div class="stat-card green"><div class="stat-card-lbl">Win Rate</div><div class="stat-card-val" style="color:var(--green)">${winRate}%</div></div>
     <div class="stat-card"><div class="stat-card-lbl">Avg R:R</div><div class="stat-card-val" style="color:var(--accent)">${avgRR}</div></div>
-    <div class="stat-card"><div class="stat-card-lbl">Targets Hit</div><div class="stat-card-val" style="color:var(--green)">${hits}</div></div>
-    <div class="stat-card"><div class="stat-card-lbl">SL Hit</div><div class="stat-card-val" style="color:var(--red)">${slHits}</div></div>
+    <div class="stat-card green"><div class="stat-card-lbl">Targets Hit</div><div class="stat-card-val" style="color:var(--green)">${hits}</div></div>
+    <div class="stat-card red"><div class="stat-card-lbl">SL Hit</div><div class="stat-card-val" style="color:var(--red)">${slHits}</div></div>
     <div class="stat-card"><div class="stat-card-lbl">Open</div><div class="stat-card-val" style="color:var(--accent)">${opens}</div></div>`;
   if(!histFiltered.length){
     document.getElementById("histTable").innerHTML=`<div class="empty"><div class="empty-ico">📭</div><div>No trades match filters.</div></div>`;
@@ -1586,6 +1605,7 @@ function renderHistory(){
   document.getElementById("histTable").innerHTML=`<div class="tscroll"><table>
     <thead><tr><th>Date</th><th>Symbol</th><th>Sector</th><th>Signal</th><th>Score</th><th>Entry / Range</th><th>T1</th><th>SL</th><th>R:R</th><th>Status</th><th>Outcome</th><th>Days</th></tr></thead>
     <tbody>${rows}</tbody></table></div>`;
+  renderAnalyticsInline();
 }
 
 async function checkOutcomes(){
@@ -1701,8 +1721,6 @@ async function loadActiveTrades(){
     document.getElementById("activeTradeUpdatedAt").textContent=`Last updated ${new Date().toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"})}`;
     await refreshActivePnL();
     startActivePnlAutoRefresh();
-    renderOverview();
-    renderPortfolioHoldings();
   }catch(e){console.warn("[ActiveTrades]",e);}
 }
 
@@ -1775,7 +1793,7 @@ async function refreshActivePnL(){
 }
 
 function startActivePnlAutoRefresh(){
-  const activeTabVisible=document.getElementById("tab-watchlists")?.classList.contains("active");
+  const activeTabVisible=document.getElementById("tab-portfolio")?.classList.contains("active");
   if(activePnlInterval||!activeTradesCache.length||document.hidden||!activeTabVisible)return;
   activePnlInterval=setInterval(refreshActivePnL,10000);
 }
