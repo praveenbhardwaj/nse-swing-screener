@@ -5,7 +5,7 @@ Run:  python groww_proxy.py
 Deps: pip install flask flask-cors requests yfinance pandas numpy
 """
 
-import hashlib, os, time, requests, threading, uuid
+import csv, hashlib, io, os, time, requests, threading, uuid
 import numpy as np
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -604,6 +604,130 @@ NSE_HEADERS = {
     "X-Requested-With": "XMLHttpRequest",
 }
 
+# NSE archive CSVs — attempt 1 (Akamai-blocked on most cloud IPs, worth trying)
+NSE_CSV_URLS = {
+    "NIFTY 50":          "https://archives.nseindia.com/content/indices/ind_nifty50list.csv",
+    "NIFTY 100":         "https://archives.nseindia.com/content/indices/ind_nifty100list.csv",
+    "NIFTY 200":         "https://archives.nseindia.com/content/indices/ind_nifty200list.csv",
+    "NIFTY 500":         "https://archives.nseindia.com/content/indices/ind_nifty500list.csv",
+    "NIFTY NEXT 50":     "https://archives.nseindia.com/content/indices/ind_niftynext50list.csv",
+    "NIFTY MIDCAP 150":  "https://archives.nseindia.com/content/indices/ind_niftymidcap150list.csv",
+    "NIFTY SMALLCAP 250":"https://archives.nseindia.com/content/indices/ind_niftysmallcap250list.csv",
+}
+
+# Alternative NSE CSV endpoints (some may work from cloud IPs)
+# Add your own GitHub repo URL here if you host the CSVs:
+# https://raw.githubusercontent.com/YOUR_USERNAME/nse-data/main/nifty500.csv
+NSE_GITHUB_URLS = {}   # populated once you host the CSVs; see README
+
+# Hardcoded Nifty 50 fallback — always works, only needs updating quarterly
+_NIFTY50_FALLBACK = {
+    "RELIANCE":    "Energy","TCS":         "Information Technology",
+    "HDFCBANK":    "Banking","BHARTIARTL":  "Telecom",
+    "ICICIBANK":   "Banking","INFY":        "Information Technology",
+    "SBIN":        "Banking","HINDUNILVR":  "FMCG",
+    "ITC":         "FMCG","KOTAKBANK":   "Banking",
+    "LT":          "Construction","BAJFINANCE":  "Financial Services",
+    "HCLTECH":     "Information Technology","MARUTI":      "Automobile",
+    "AXISBANK":    "Banking","SUNPHARMA":   "Pharmaceutical",
+    "TITAN":       "Consumer Goods","ASIANPAINT":  "Consumer Goods",
+    "ULTRACEMCO":  "Cement","WIPRO":        "Information Technology",
+    "NTPC":        "Energy","ONGC":         "Energy",
+    "POWERGRID":   "Energy","COALINDIA":    "Metals & Mining",
+    "M&M":         "Automobile","BAJAJ-AUTO":  "Automobile",
+    "EICHERMOT":   "Automobile","HEROMOTOCO":  "Automobile",
+    "TATAMOTORS":  "Automobile","TATASTEEL":   "Metals",
+    "JSWSTEEL":    "Metals","HINDALCO":    "Metals",
+    "ADANIENT":    "Diversified","ADANIPORTS":  "Logistics",
+    "INDUSINDBK":  "Banking","GRASIM":      "Diversified",
+    "CIPLA":       "Pharmaceutical","DRREDDY":     "Pharmaceutical",
+    "DIVISLAB":    "Pharmaceutical","BPCL":        "Energy",
+    "TATACONSUM":  "FMCG","NESTLEIND":   "FMCG",
+    "BRITANNIA":   "FMCG","LTIM":         "Information Technology",
+    "TECHM":       "Information Technology","HDFCLIFE":    "Insurance",
+    "SBILIFE":     "Insurance","BAJAJFINSV":  "Financial Services",
+}
+
+_NIFTY_NEXT50_FALLBACK = {
+    "ABB":"Capital Goods","ADANIGREEN":"Energy","ADANITRANS":"Energy",
+    "AMBUJACEM":"Cement","AUROPHARMA":"Pharmaceutical","BANDHANBNK":"Banking",
+    "BERGEPAINT":"Consumer Goods","BEL":"Capital Goods","BOSCHLTD":"Automobile",
+    "CHOLAFIN":"Financial Services","COLPAL":"FMCG","CONCOR":"Logistics",
+    "CUMMINSIND":"Capital Goods","DABUR":"FMCG","DMART":"Retail",
+    "DLF":"Real Estate","FEDERALBNK":"Banking","GAIL":"Energy",
+    "GODREJCP":"FMCG","GODREJPROP":"Real Estate","HAVELLS":"Capital Goods",
+    "ICICIPRULI":"Insurance","IDFCFIRSTB":"Banking","IGL":"Energy",
+    "INDHOTEL":"Hospitality","INDUSTOWER":"Telecom","IRCTC":"Logistics",
+    "JINDALSTEL":"Metals","JUBLFOOD":"Consumer Goods","LICI":"Insurance",
+    "LUPIN":"Pharmaceutical","MARICO":"FMCG","MUTHOOTFIN":"Financial Services",
+    "NAUKRI":"Information Technology","NMDC":"Metals & Mining","OFSS":"Information Technology",
+    "PAGEIND":"Consumer Goods","PERSISTENT":"Information Technology","PIIND":"Chemicals",
+    "PNB":"Banking","POLYCAB":"Capital Goods","RECLTD":"Financial Services",
+    "SAIL":"Metals","SHREECEM":"Cement","SIEMENS":"Capital Goods",
+    "SUNTV":"Media","TORNTPHARM":"Pharmaceutical","TRENT":"Retail",
+    "UPL":"Chemicals","VEDL":"Metals","VBL":"FMCG",
+    "VOLTAS":"Consumer Goods","ZOMATO":"Consumer Services","NYKAA":"Retail",
+    "PAYTM":"Financial Services","POLICYBZR":"Insurance","MOTHERSON":"Automobile",
+}
+
+_NIFTY_MIDCAP_FALLBACK = {
+    "AAVAS":"Financial Services","ACC":"Cement","ABCAPITAL":"Financial Services",
+    "ALKEM":"Pharmaceutical","AMARAJABAT":"Automobile","APOLLOTYRE":"Automobile",
+    "ASHOKLEY":"Automobile","ASTRAL":"Construction","AUBANK":"Banking",
+    "BALKRISIND":"Automobile","BATAINDIA":"Consumer Goods","BLUEDART":"Logistics",
+    "BRIGADE":"Real Estate","CEATLTD":"Automobile","CGPOWER":"Capital Goods",
+    "COFORGE":"Information Technology","CROMPTON":"Consumer Goods","CYIENT":"Information Technology",
+    "DEEPAKNITRI":"Chemicals","DELHIVERY":"Logistics","DIXON":"Consumer Goods",
+    "ELGIEQUIP":"Capital Goods","EMAMILTD":"FMCG","ENDURANCE":"Automobile",
+    "ESCORTS":"Automobile","EXIDEIND":"Automobile","FINEORG":"Chemicals",
+    "FORTIS":"Healthcare","GLAND":"Pharmaceutical","GLAXO":"Pharmaceutical",
+    "GNFC":"Chemicals","GODAWARI":"Metals","GRINDWELL":"Capital Goods",
+    "HFCL":"Telecom","HLEGLAS":"Capital Goods","HONAUT":"Capital Goods",
+    "INDIAMART":"Information Technology","IPCALAB":"Pharmaceutical","JBCHEPHARM":"Pharmaceutical",
+    "JKCEMENT":"Cement","KAJARIACER":"Construction","KALPATPOWR":"Energy",
+    "KANSAINER":"Consumer Goods","KEC":"Capital Goods","KNRCON":"Construction",
+    "KPITTECH":"Information Technology","LAURUSLABS":"Pharmaceutical","LTF":"Financial Services",
+    "LTTS":"Information Technology","MACROTECH":"Real Estate","MAHABANK":"Banking",
+    "MANAPPURAM":"Financial Services","MAXHEALTH":"Healthcare","MCX":"Financial Services",
+    "MGL":"Energy","MPHASIS":"Information Technology","MRF":"Automobile",
+    "NCC":"Construction","NOCIL":"Chemicals","OBEROIRLTY":"Real Estate",
+    "PATANJALI":"FMCG","PETRONET":"Energy","PFIZER":"Pharmaceutical",
+    "PHOENIXLTD":"Real Estate","PRESTIGE":"Real Estate","PVR":"Media",
+    "RBLBANK":"Banking","ROUTE":"Information Technology","SANOFI":"Pharmaceutical",
+    "SHYAMMETL":"Metals","SONACOMS":"Automobile","SRF":"Chemicals",
+    "SUNDRMFAST":"Automobile","SUNTECK":"Real Estate","SUPREMEIND":"Chemicals",
+    "TATACHEM":"Chemicals","TATACOMM":"Telecom","TATAELXSI":"Information Technology",
+    "THERMAX":"Capital Goods","TORNTPOWER":"Energy","TRIDENT":"Textiles",
+    "TVSMOTORS":"Automobile","UNIONBANK":"Banking","VGUARD":"Consumer Goods",
+    "VINATI":"Chemicals","WELCORP":"Metals","WHIRLPOOL":"Consumer Goods",
+    "ZEEL":"Media","ZENSAR":"Information Technology","APLAPOLLO":"Metals",
+    "CAMPUS":"Consumer Goods","CMSINFO":"Information Technology","DALBHARAT":"Cement",
+    "ERIS":"Pharmaceutical","GLENMARK":"Pharmaceutical","HOMEFIRST":"Financial Services",
+    "KFINTECH":"Financial Services","KRBL":"FMCG","LATENTVIEW":"Information Technology",
+    "NUVOCO":"Cement","RAMCOCEM":"Cement","RATNAMANI":"Metals",
+    "REDINGTON":"Information Technology","SAFARI":"Consumer Goods","SCHAEFFLER":"Automobile",
+    "SHOPERSTOP":"Retail","STARHEALTH":"Insurance","STLTECH":"Telecom",
+    "SUVENPHAR":"Pharmaceutical","SWANENERGY":"Energy","TANLA":"Information Technology",
+    "TIINDIA":"Automobile","TIMKEN":"Capital Goods","VMART":"Retail",
+    "WELSPUNIND":"Textiles","YESBANK":"Banking","ZYDUSWELL":"Pharmaceutical",
+}
+
+def _build_fallback_universe(scope):
+    """Return a hardcoded universe when all live sources fail."""
+    base = {s: {"symbol": s, "name": s, "sector": sec, "industry": sec}
+            for s, sec in _NIFTY50_FALLBACK.items()}
+    if scope in ("NIFTY 50",):
+        return list(base.values())
+    # Expand for larger indices
+    extra = {**_NIFTY_NEXT50_FALLBACK}
+    if scope in ("NIFTY 200", "NIFTY 500", "ALL", "NIFTY MIDCAP 150", "NIFTY SMALLCAP 250"):
+        extra.update(_NIFTY_MIDCAP_FALLBACK)
+    merged = {**base}
+    merged.update({s: {"symbol": s, "name": s, "sector": sec, "industry": sec}
+                   for s, sec in extra.items()})
+    print(f"[Universe] Using hardcoded fallback: {len(merged)} stocks for {scope}")
+    return list(merged.values())
+
 UNIVERSE_INDICES = {
     "NIFTY 50":  ["NIFTY 50"],
     "NIFTY 100": ["NIFTY 100"],
@@ -660,13 +784,82 @@ def _fetch_index(session, index_name):
         print(f"[NSE] {index_name}: {e}")
         return {}
 
+def _parse_nse_csv(text):
+    """Parse NSE-format CSV (Symbol, Company Name, Industry columns)."""
+    stocks = {}
+    try:
+        reader = csv.DictReader(io.StringIO(text))
+        for row in reader:
+            sym = (row.get("Symbol") or "").strip()
+            if not sym or len(sym) > 20:
+                continue
+            sector = (row.get("Industry") or "Unknown").strip() or "Unknown"
+            stocks[sym] = {
+                "symbol":   sym,
+                "name":     (row.get("Company Name") or sym).strip(),
+                "sector":   sector,
+                "industry": sector,
+            }
+    except Exception:
+        pass
+    return stocks
+
+def _fetch_csv_url(url, label):
+    """Fetch a CSV from any URL; return parsed dict or {}."""
+    try:
+        r = requests.get(url, timeout=20,
+                         headers={"User-Agent": NSE_HEADERS["User-Agent"],
+                                  "Accept": "text/csv,text/plain,*/*"})
+        if r.status_code == 200 and r.text.strip():
+            stocks = _parse_nse_csv(r.text)
+            if stocks:
+                print(f"[{label}] {len(stocks)} stocks")
+                return stocks
+        print(f"[{label}] HTTP {r.status_code} or empty")
+    except Exception as e:
+        print(f"[{label}] {e}")
+    return {}
+
+def _fetch_index_csv(index_name):
+    """Try NSE archive CSV, then GitHub mirror."""
+    # 1. NSE archives (blocked on many cloud IPs, worth a try)
+    url = NSE_CSV_URLS.get(index_name)
+    if url:
+        data = _fetch_csv_url(url, f"NSE-CSV/{index_name}")
+        if data:
+            return data
+    # 2. GitHub mirror
+    gurl = NSE_GITHUB_URLS.get(index_name)
+    if gurl:
+        data = _fetch_csv_url(gurl, f"GitHub/{index_name}")
+        if data:
+            return data
+    return {}
+
 def fetch_universe(scope="NIFTY 500"):
     indices = UNIVERSE_INDICES.get(scope, ["NIFTY 500"])
-    session = _nse_session(); merged = {}
+    merged = {}
     for idx in indices:
-        merged.update(_fetch_index(session, idx)); time.sleep(0.4)
+        # Layer 1: CSV sources (NSE archive + GitHub mirror)
+        data = _fetch_index_csv(idx)
+        if data:
+            merged.update(data)
+            continue
+        # Layer 2: NSE API with cookie session
+        print(f"[Universe] CSV/GitHub failed for {idx}, trying NSE API…")
+        session = _nse_session()
+        api_data = _fetch_index(session, idx)
+        if api_data:
+            merged.update(api_data)
+            time.sleep(0.3)
+            continue
+        # Layer 3: hardcoded fallback (always works)
+        print(f"[Universe] NSE API also failed for {idx}, using hardcoded fallback")
+        for stock in _build_fallback_universe(scope):
+            merged[stock["symbol"]] = stock
+        break   # fallback covers entire scope, skip remaining indices
     result = list(merged.values())
-    print(f"[Universe] {scope}: {len(result)} stocks")
+    print(f"[Universe] {scope}: {len(result)} stocks total")
     return result
 
 def get_universe(scope="NIFTY 500"):
