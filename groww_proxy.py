@@ -1881,6 +1881,15 @@ def run_trade_outcome_check():
                 end=today.strftime("%Y-%m-%d"),
                 interval="1d", auto_adjust=True)
             if df is None or df.empty:
+                # Some rebranded/illiquid NSE tickers fail with auto_adjust; retry without it.
+                try:
+                    df = yf.Ticker(f"{sym}.NS").history(
+                        start=entry_day.strftime("%Y-%m-%d"),
+                        end=today.strftime("%Y-%m-%d"),
+                        interval="1d", auto_adjust=False)
+                except Exception:
+                    df = None
+            if df is None or df.empty:
                 return
             for dt, row in df.iterrows():
                 low = float(row["Low"])
@@ -1971,6 +1980,45 @@ def run_trade_outcome_check():
                         "outcome_date": today.date().isoformat(),
                         "days_to_outcome": days_to_outcome,
                     }
+                elif YF_OK:
+                    # Pass 1 missed this trade (yfinance returned empty) and today's live
+                    # high/low hasn't triggered the level yet. Scan the last 10 trading days
+                    # row-by-row so a hit from a prior session (e.g. yesterday) is caught
+                    # with the correct outcome date rather than being silently ignored.
+                    try:
+                        hist_recent = yf.Ticker(f"{sym}.NS").history(
+                            period="10d", interval="1d", auto_adjust=True)
+                        if hist_recent is None or hist_recent.empty:
+                            hist_recent = yf.Ticker(f"{sym}.NS").history(
+                                period="10d", interval="1d", auto_adjust=False)
+                        if hist_recent is not None and not hist_recent.empty:
+                            for dt, row in hist_recent.iterrows():
+                                dt_norm = dt.normalize().tz_localize(None) if dt.tzinfo else dt.normalize()
+                                if dt_norm < actual_entry_day:
+                                    continue
+                                h = float(row["High"])
+                                l = float(row["Low"])
+                                days_hist = max((dt_norm.date() - actual_entry_day.date()).days + 1, 1)
+                                if h >= t1:
+                                    updates_by_id[tid] = {
+                                        "id": tid,
+                                        "status": "target_hit",
+                                        "outcome_price": t1,
+                                        "outcome_date": dt_norm.date().isoformat(),
+                                        "days_to_outcome": days_hist,
+                                    }
+                                    break
+                                if l <= sl:
+                                    updates_by_id[tid] = {
+                                        "id": tid,
+                                        "status": "sl_hit",
+                                        "outcome_price": sl,
+                                        "outcome_date": dt_norm.date().isoformat(),
+                                        "days_to_outcome": days_hist,
+                                    }
+                                    break
+                    except Exception:
+                        pass
             except Exception:
                 continue
 

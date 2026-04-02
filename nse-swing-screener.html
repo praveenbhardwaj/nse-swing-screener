@@ -897,38 +897,63 @@ const DEFAULTS={
   fetchFundamentals:false,
 };
 
+// ── GLOBAL STATE ──────────────────────────────────────────────
+// Screener results returned by the backend scan
 let allResults=[],rejectedResults=[],filteredResults=[];
+// Active scan job tracking; proxyOk gates the "Run Scan" button
 let currentJobId=null,pollInterval=null,proxyOk=false;
+// Stock universe fetched from backend; sort state for the results table
 let universeData=[],sortKey="score",sortAsc=false;
+// Full trade history and the currently filtered view shown in the History tab
 let historyData=[],histFiltered=[];
+// In-memory snapshot of open trades used by the active-trades panel
 let activeTradesCache=[];
+// Timer ID for the 10-second live P&L auto-refresh; busy flag prevents overlapping fetches
 let activePnlInterval=null;
 let activePnlBusy=false;
+// Portfolio summary data fetched from /portfolio-summary (KPIs, holdings, allocation)
 let portfolioSummary={summary:null,allocation:[],holdings:[]};
 
 // ── INIT ──────────────────────────────────────────────────────
 window.addEventListener("load",async()=>{
+  // Show today's date in the nav bar
   document.getElementById("navDate").textContent=
     new Date().toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"numeric"});
+
+  // Keep the min-score slider label in sync with the range input value
   document.getElementById("minScore").addEventListener("input",e=>{
     document.getElementById("minScoreLbl").textContent=e.target.value;
     document.getElementById("minScoreDisp").textContent=e.target.value;
   });
+
   const credsSet=sessionStorage.getItem("groww_creds_set")==="1";
+
+  // Verify backend is reachable before allowing any scans
   await checkProxy();
   switchTab("screener");
+
+  // Load live market data (Nifty 50, India VIX) and stock universe in parallel
   fetchMarketData();
   loadUniverse();
+
+  // Load existing open trades so the active-trades panel is visible immediately
   loadActiveTrades();
+
+  // Initialise the portfolio module (defined in frontend/portfolio/index.js)
   if(typeof window.initPortfolioModule==="function")window.initPortfolioModule();
+
+  // Warn the user if Groww API credentials haven't been provided this session
   if(!credsSet){
     showToast("Groww not connected. Running with Yahoo fallback.","info");
   }
+
+  // Pause the live P&L refresh when the browser tab is hidden to save resources
   document.addEventListener("visibilitychange",()=>{
     if(document.hidden)stopActivePnlAutoRefresh();
     else startActivePnlAutoRefresh();
   });
-  // Period pill click handler
+
+  // History period pill (7d / 30d / All) — re-render the table on selection change
   document.querySelectorAll(".period-pill").forEach(btn=>{
     btn.addEventListener("click",()=>{
       document.querySelectorAll(".period-pill").forEach(b=>b.classList.remove("active"));
@@ -939,6 +964,8 @@ window.addEventListener("load",async()=>{
 });
 
 // ── PROXY ─────────────────────────────────────────────────────
+// Pings the backend /health endpoint and updates the status banner.
+// Sets the global proxyOk flag so other functions can gate on backend availability.
 async function checkProxy(){
   const banner=document.getElementById("proxyBanner");
   const msg=document.getElementById("proxyMsg");
@@ -958,6 +985,9 @@ async function checkProxy(){
 }
 
 // ── MARKET DATA ───────────────────────────────────────────────
+// Fetches live Nifty 50 price/RSI and India VIX from the backend and
+// updates the market context bar at the top of the page.
+// VIX colour: green < 15 (calm), amber 15-20 (elevated), red > 20 (high fear).
 async function fetchMarketData(){
   try{
     const r=await fetch(`${PROXY}/market-data`,{signal:AbortSignal.timeout(15000)});
@@ -978,6 +1008,8 @@ async function fetchMarketData(){
 }
 
 // ── UNIVERSE ──────────────────────────────────────────────────
+// Loads the stock universe for the selected index (e.g. NIFTY 500).
+// Populates the sector filter dropdown and updates the universe count in the KPI bar.
 async function loadUniverse(){
   const scope=document.getElementById("universeSelect").value;
   document.getElementById("m-uni").textContent="loading…";
@@ -994,12 +1026,15 @@ async function loadUniverse(){
   }catch(e){document.getElementById("m-uni").textContent="Error";}
 }
 
+// Called when the user picks a different index from the dropdown.
+// Reloads universe data and clears the sector filter back to "All".
 function onUniverseChange(){
   loadUniverse();
   document.getElementById("secF").innerHTML='<option value="all">All Sectors</option>';
 }
 
 // ── FILTER RESET ──────────────────────────────────────────────
+// Restores all screener filter inputs to their DEFAULTS values.
 function resetFilters(){
   const set=(id,v)=>{const el=document.getElementById(id);if(el)el.value=v;};
   const chk=(id,v)=>{const el=document.getElementById(id);if(el)el.checked=v;};
@@ -1022,6 +1057,9 @@ function resetFilters(){
 }
 
 // ── RUN SCREENER ──────────────────────────────────────────────
+// Starts a new backend scan job.  Collects all filter values from the UI,
+// posts them to /screen, then kicks off pollProgress() to stream results
+// as they arrive rather than waiting for the full scan to complete.
 async function runScreen(){
   if(!proxyOk){alert("Backend is offline. Start it with: python groww_proxy.py");return;}
   const btn=document.getElementById("runBtn"),sp=document.getElementById("spin");
@@ -1031,6 +1069,7 @@ async function runScreen(){
   document.getElementById("res").innerHTML="";
   document.getElementById("progFound").textContent="";
 
+  // Helper shortcuts for reading filter inputs without repetitive null-checks
   const chk=id=>document.getElementById(id)?.checked??false;
   const num=(id,fb)=>parseFloat(document.getElementById(id)?.value)||fb;
   const str=(id,fb)=>document.getElementById(id)?.value||fb;
@@ -1068,18 +1107,24 @@ async function runScreen(){
   }catch(e){showError("Could not start scan: "+e.message);}
 }
 
+// Polls /scan-progress every second to update the progress bar and
+// stream partial results into the table while the scan is still running.
+// Stops automatically when the backend reports status "done" or "cancelled".
 async function pollProgress(){
   if(!currentJobId)return;
   try{
     const r=await fetch(`${PROXY}/scan-progress/${currentJobId}`);
     const d=await r.json();
     if(d.error){stopScan();return;}
+    // Update progress bar width as a percentage of stocks processed
     const pct=d.total>0?(d.progress/d.total)*100:0;
     document.getElementById("pf").style.width=`${pct}%`;
     document.getElementById("progCount").textContent=`${d.progress.toLocaleString("en-IN")} / ${d.total.toLocaleString("en-IN")}`;
     const msg=d.found>0?`✓ ${d.found} matching so far…`:d.status_msg||"";
     document.getElementById("progFound").textContent=msg;
+    // Render breadth banner (advance/decline ratio) if the backend has calculated it
     if(d.breadth&&d.breadth.ratio!==undefined)renderBreadthBanner(d.breadth);
+    // Show intermediate results as they stream in (interim=true skips final analytics)
     if(d.results&&d.results.length>0){allResults=d.results;rejectedResults=d.rejected||[];renderTable(applyClientFilters(allResults),true);}
     if(d.status==="done"||d.status==="cancelled"){
       allResults=d.results||[];rejectedResults=d.rejected||[];
@@ -1088,6 +1133,9 @@ async function pollProgress(){
   }catch(e){console.warn("[poll]",e);}
 }
 
+// Renders the market breadth (Advance/Decline) banner above the results table.
+// A/D >= 1.5 → green (strong market); >= 1.2 → amber (neutral); < 1.2 → red
+// (weak — the backend also downgrades STRONG BUY signals to BUY in this case).
 function renderBreadthBanner(b){
   const el=document.getElementById("breadthBanner");
   if(!b||b.ratio===undefined)return;
@@ -1097,6 +1145,7 @@ function renderBreadthBanner(b){
   else{el.className="breadth-banner show breadth-weak";document.getElementById("breadthIcon").textContent="⚠️";document.getElementById("breadthMsg").textContent=`Breadth weak — A/D ${b.ratio} — STRONG BUY signals downgraded to BUY`;}
 }
 
+// Clears the poll interval and resets all scan-in-progress UI elements.
 function stopScan(){
   clearInterval(pollInterval);pollInterval=null;
   document.getElementById("runBtn").disabled=false;
@@ -1105,29 +1154,38 @@ function stopScan(){
   document.getElementById("prog").classList.remove("show");
 }
 
+// Sends a cancellation request to the backend then stops local polling.
 async function cancelScan(){
   if(!currentJobId)return;
   try{await fetch(`${PROXY}/cancel-scan/${currentJobId}`,{method:"POST"});}catch(e){}
   stopScan();
 }
 
+// Displays a full-width error message inside the results area.
 function showError(msg){
   stopScan();
   document.getElementById("res").innerHTML=`<div class="tcard"><div class="empty"><div class="empty-ico">⚠️</div><div style="color:var(--red)">${msg}</div></div></div>`;
 }
 
+// Called once a scan finishes ("done"/"cancelled").
+// Renders the final results table, rejected stocks, rebuilds the sector filter,
+// and auto-syncs any BUY/STRONG BUY signals to the active-trades DB.
 async function finaliseResults(){
   document.getElementById("m-lastscan").textContent=allResults.length;
   document.getElementById("m-lastscan-sub").textContent=new Date().toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"});
   renderTable(applyClientFilters(allResults),false);
   renderRejected(rejectedResults);
   await autoSyncBuySignalsToOngoingTrades();
+  // Rebuild sector filter with the actual sectors found in this scan result
   const sectors=[...new Set(allResults.map(r=>r.sector))].filter(s=>s&&s!=="Unknown").sort();
   const secF=document.getElementById("secF");const cur=secF.value;
   secF.innerHTML='<option value="all">All Sectors</option>';
   sectors.forEach(s=>{const o=document.createElement("option");o.value=s;o.textContent=s;if(s===cur)o.selected=true;secF.appendChild(o);});
 }
 
+// After each scan, automatically upserts BUY/STRONG BUY results into the trades DB
+// using auto_sync=true so the backend preserves any manually entered entry prices/qty.
+// Reloads the active-trades panel so newly added trades appear immediately.
 async function autoSyncBuySignalsToOngoingTrades(){
   const buyable=allResults.filter(r=>r.sig==="BUY"||r.sig==="STRONG BUY");
   if(!buyable.length){await loadActiveTrades();return;}
@@ -1147,6 +1205,8 @@ async function autoSyncBuySignalsToOngoingTrades(){
 }
 
 // ── CLIENT FILTERS ────────────────────────────────────────────
+// Filters the in-memory results by the currently selected sector and signal
+// dropdowns without making another backend request.
 function applyClientFilters(data){
   const sec=document.getElementById("secF").value;
   const sig=document.getElementById("sigF").value;
@@ -1156,24 +1216,31 @@ function applyClientFilters(data){
     return true;
   });
 }
+// Called by the sector/signal dropdown onChange handlers to re-render the table.
 function applyClientFiltersAndRender(){filteredResults=applyClientFilters(allResults);renderTable(filteredResults,false);}
 
 // ── RENDER TABLE ──────────────────────────────────────────────
+// Draws an SVG ring (donut) score badge.
+// Colour: green >= 80, blue >= 60, amber < 60.
 function ring(sc){
   const r=13,c=2*Math.PI*r,f=(sc/100)*c;
   const col=sc>=80?"#16a34a":sc>=60?"#2563eb":"#d97706";
   return `<div class="ring-c"><svg class="ring-svg" width="34" height="34" viewBox="0 0 34 34"><circle cx="17" cy="17" r="${r}" fill="none" stroke="#e4e7ef" stroke-width="2.5"/><circle cx="17" cy="17" r="${r}" fill="none" stroke="${col}" stroke-width="2.5" stroke-dasharray="${f} ${c-f}" stroke-linecap="round"/></svg><div class="ring-n" style="color:${col}">${sc}</div></div>`;
 }
+// Returns a coloured signal badge HTML string for STRONG BUY / BUY / WATCH.
 function badge(sg){
   if(sg==="STRONG BUY")return`<span class="badge bs">▲ STRONG BUY</span>`;
   if(sg==="BUY")return`<span class="badge bb">▲ BUY</span>`;
   return`<span class="badge bw">○ WATCH</span>`;
 }
+// Builds a sortable <th> element; highlights the active sort column and shows direction arrow.
 function th(k,l){
   const active=sortKey===k;
   return`<th class="${active?"ta":""}" onclick="sortBy('${k}')">${l} ${active?(sortAsc?"↑":"↓"):"↕"}</th>`;
 }
 
+// Builds the Technicals cell: RSI pill, volume ratio pill, EMA position pill,
+// and MACD direction pill (with a crossover badge if triggered in the last 5 days).
 function techCell(r){
   const rsiCls=r.rsi>=60?"pill-a":r.rsi>=50?"pill-g":"pill-m";
   const rsiPill=`<span class="pill ${rsiCls}">RSI ${r.rsi}</span>`;
@@ -1181,9 +1248,11 @@ function techCell(r){
   const vPill=`<span class="pill ${vCls}">Vol ${r.vol_ratio}×</span>`;
   const emaCls=r.ema_pos==="above"?"pill-g":r.ema_pos==="at"?"pill-m":"pill-n";
   const emaLbl=r.ema_pos==="above"?"▲ EMA":r.ema_pos==="at"?"≈ EMA":"▼ EMA";
+  // ma_conds_met counts how many of the 4 moving-average conditions are satisfied
   const maConds=r.ma_conds_met!=null?` (${r.ma_conds_met}/4)`:"";
   const emaPill=`<span class="pill ${emaCls}">${emaLbl}${maConds}</span>`;
   const macdCls=r.macd==="bullish"?"pill-up":r.macd==="bearish"?"pill-dn":"pill-n";
+  // "XO" badge means MACD crossed above signal line within the last 5 days
   const macdXover=r.macd_crossover_5d?`<span class="pill pill-g" style="font-size:9px">XO</span>`:"";
   const macdLbl=r.macd==="bullish"?"▲ MACD":r.macd==="bearish"?"▼ MACD":"→ MACD";
   const macdPill=`<span class="pill ${macdCls}">${macdLbl}</span>${macdXover}`;
@@ -1214,6 +1283,9 @@ function fundCell(r){
   return`<div style="font-family:'JetBrains Mono',monospace;font-size:9px;line-height:1.6;color:var(--sub)">${parts.join("<br>")}</div>`;
 }
 
+// Shows the stock's current price as a percentile within its 52-week range.
+// Sweet spot: 40–80%ile (not near the top, not near the bottom).
+// Green 40-80, red < 20 or > 90 (overextended or near 52wk low), grey otherwise.
 function pos52Cell(r){
   const p=r.pctile_52wk;
   if(p==null)return`<span class="rs-na">—</span>`;
@@ -1319,9 +1391,12 @@ function renderTable(data,interim){
 }
 
 // ── REJECTED ──────────────────────────────────────────────────
+// Renders a collapsible section showing all stocks that were scanned but
+// failed at least one filter, grouped by rejection reason (most common first).
 function renderRejected(data){
   const area=document.getElementById("rejectedArea");
   if(!area||!data||!data.length){if(area)area.innerHTML="";return;}
+  // Group rejected stocks by their rejection reason string
   const byReason={};
   data.forEach(r=>{const k=r.reason||"Unknown";if(!byReason[k])byReason[k]=[];byReason[k].push(r);});
   const sorted=Object.entries(byReason).sort((a,b)=>b[1].length-a[1].length);
@@ -1343,6 +1418,9 @@ function renderRejected(data){
 }
 
 // ── REFRESH PRICES ────────────────────────────────────────────
+// Fetches current LTP for all scanned symbols and recalculates T1/SL levels
+// relative to the new price (using the same TP%/SL% from the original scan).
+// Re-renders the results table with updated prices without running a new scan.
 async function refreshPrices(){
   if(!allResults.length)return;
   try{
@@ -1353,6 +1431,7 @@ async function refreshPrices(){
       const lp=prices[row.sym];
       if(!lp||!lp.ltp)return row;
       const np=lp.ltp,upd={...row,price:np};
+      // Recalculate T1/T2/SL as percentage offsets from the refreshed price
       if(row.sig!=="WATCH"&&row.tp_pct&&row.sl_pct){
         upd.t1=+(np*(1+row.tp_pct/100)).toFixed(2);
         upd.t2=+(np*(1+(row.tp_pct+0.5)/100)).toFixed(2);
@@ -1365,10 +1444,13 @@ async function refreshPrices(){
 }
 
 // ── SORT / CLEAR ──────────────────────────────────────────────
+// Toggles sort direction if the same column is clicked twice; otherwise
+// switches to the new column in descending order (highest first).
 function sortBy(k){
   if(sortKey===k)sortAsc=!sortAsc;else{sortKey=k;sortAsc=false;}
   renderTable(applyClientFilters(allResults),false);
 }
+// Wipes all scan results and resets the UI to its blank state.
 function clearAll(){
   allResults=[];filteredResults=[];
   document.getElementById("res").innerHTML="";
@@ -1380,6 +1462,8 @@ function clearAll(){
 }
 
 // ── CREDENTIAL MODAL ──────────────────────────────────────────
+// Opens the Groww API credentials modal and disables the scan button
+// so the user can't scan without credentials.
 function showCredentialModal(){
   document.getElementById("credModal").style.display="flex";
   document.getElementById("credErr").textContent="";
@@ -1391,11 +1475,15 @@ function hideCredentialModal(){
   const runBtn=document.getElementById("runBtn");
   if(runBtn)runBtn.disabled=false;
 }
+// Allows the user to skip Groww credentials and fall back to Yahoo Finance for LTP.
 function skipGrowwAndContinue(){
   sessionStorage.removeItem("groww_creds_set");
   hideCredentialModal();
   showToast("Using Yahoo fallback for live prices.","info");
 }
+// Sends the entered API key/secret to the backend to authenticate with Groww.
+// On success, marks the session as connected and refreshes market data.
+// On failure, surfaces the most specific error message from the Groww API response.
 async function submitCredentials(){
   const key=document.getElementById("credKey").value.trim();
   const secret=document.getElementById("credSecret").value.trim();
@@ -1408,6 +1496,7 @@ async function submitCredentials(){
     const d=await r.json();
     if(d.ok){sessionStorage.setItem("groww_creds_set","1");hideCredentialModal();await checkProxy();fetchMarketData();loadUniverse();}
     else{
+      // Walk the nested Groww error response to find the most useful message
       const retryAfter=d?.details?.retry_after_seconds;
       const apiMsg=d?.details?.payload?.errorMessage?.message
         || d?.details?.payload?.error?.message
@@ -1422,6 +1511,8 @@ async function submitCredentials(){
   finally{btn.disabled=false;btn.textContent="Connect to Groww";}
 }
 
+// Fetches portfolio KPIs, holdings, and sector allocation from the backend
+// and refreshes all three portfolio sub-components.
 async function loadPortfolioSummary(){
   try{
     const r=await fetch(`${PROXY}/portfolio-summary`,{signal:AbortSignal.timeout(12000)});
@@ -1436,6 +1527,7 @@ async function loadPortfolioSummary(){
   }
 }
 
+// Formats a number as Indian-locale currency string (e.g. ₹1,23,456.78).
 function money(v){
   return `₹${Number(v||0).toLocaleString("en-IN",{maximumFractionDigits:2})}`;
 }
@@ -1485,6 +1577,8 @@ function renderPortfolioHoldings(){
   </table></div>`;
 }
 
+// Renders quick inline analytics (profitable/losing count, risk ratio) below
+// the history table.  Risk ratio = (loss positions / total) — red if > 50%.
 function renderAnalyticsInline(){
   const el=document.getElementById("inlineAnalytics");
   if(!el)return;
@@ -1500,11 +1594,15 @@ function renderAnalyticsInline(){
   `;
 }
 
-// Kept as no-ops for any external callers
+// Kept as no-ops for backward compatibility with any external callers.
 function renderAnalytics(){}
 function renderReports(){}
 
 // ── TABS ──────────────────────────────────────────────────────
+// Switches the visible tab and manages side effects:
+//   • Portfolio tab  → start 10s live P&L auto-refresh and load portfolio summary.
+//   • Other tabs     → stop the P&L auto-refresh to save resources.
+//   • History tab    → lazy-load trade history on first visit.
 function switchTab(name){
   const tabs=["screener","portfolio","history"];
   const btnMap={screener:"tabBtnScreener",portfolio:"tabBtnPortfolio",history:"tabBtnHistory"};
@@ -1520,6 +1618,9 @@ function switchTab(name){
 }
 
 // ── SAVE TRADES ───────────────────────────────────────────────
+// Manually saves all BUY/STRONG BUY results from the current scan to the DB.
+// Unlike autoSyncBuySignalsToOngoingTrades, this is triggered by the user
+// clicking "Save Trades" and does NOT set auto_sync=true.
 async function saveScanResults(){
   const buyable=allResults.filter(r=>r.sig==="BUY"||r.sig==="STRONG BUY");
   if(!buyable.length){showToast("No BUY/STRONG BUY results to save.","info");return;}
@@ -1531,6 +1632,9 @@ async function saveScanResults(){
 }
 
 // ── HISTORY ───────────────────────────────────────────────────
+// Fetches all trades (open + closed) from the backend.
+// Note: GET /trades automatically runs run_trade_outcome_check() on the backend
+// before returning, so statuses are always up-to-date when this is called.
 async function loadHistory(){
   document.getElementById("histTable").innerHTML=`<div class="empty"><div class="empty-ico">⏳</div><div>Loading…</div></div>`;
   try{
@@ -1538,6 +1642,7 @@ async function loadHistory(){
     const d=await r.json();
     if(!d.ok){showToast(d.error||"Failed to load.","err");return;}
     historyData=d.trades||[];
+    // Populate the sector filter in the history tab from the returned data
     const sectors=[...new Set(historyData.map(t=>t.sector).filter(Boolean))].sort();
     const hSecF=document.getElementById("hSecF");
     hSecF.innerHTML='<option value="all">All Sectors</option>';
@@ -1546,6 +1651,8 @@ async function loadHistory(){
   }catch(e){showToast("Network error loading history.","err");}
 }
 
+// Applies the history tab filters (signal, sector, status, time period) to
+// historyData and re-renders the table and summary stat cards.
 function renderHistory(){
   const sigF=document.getElementById("hSigF").value;
   const secF=document.getElementById("hSecF").value;
@@ -1555,6 +1662,7 @@ function renderHistory(){
     if(sigF!=="all"&&t.signal!==sigF)return false;
     if(secF!=="all"&&t.sector!==secF)return false;
     if(statusF!=="all"&&t.status!==statusF)return false;
+    // Period filter: convert "days" to a unix cutoff timestamp
     if(period){
       const cutoff=Date.now()-Number(period)*86400000;
       if(!t.scanned_at||new Date(t.scanned_at).getTime()<cutoff)return false;
@@ -1608,6 +1716,11 @@ function renderHistory(){
   renderAnalyticsInline();
 }
 
+// Triggers a full trade outcome reconciliation on the backend.
+// The backend checks each open trade's historical OHLC (via yfinance) and
+// today's live LTP high/low to mark trades as "target_hit" or "sl_hit".
+// After completion, reloads both the history table and the active-trades panel
+// so the UI immediately reflects the updated statuses.
 async function checkOutcomes(){
   const btn=document.getElementById("checkOutcomesBtn");
   btn.disabled=true;btn.textContent="Checking…";
@@ -1615,6 +1728,7 @@ async function checkOutcomes(){
     const r=await fetch(`${PROXY}/check-outcomes`,{method:"POST",signal:AbortSignal.timeout(120000)});
     const d=await r.json();
     d.ok?showToast(`Checked ${d.checked} trades — ${d.updated} updated.`,"ok"):showToast(d.error||"Failed.","err");
+    // Reload both views so closed trades disappear from active panel and appear in history
     if(d.ok){await loadHistory();await loadActiveTrades();}
   }catch(e){showToast("Network error.","err");}
   finally{btn.disabled=false;btn.textContent="⚡ Check Outcomes";}
@@ -1705,11 +1819,16 @@ async function submitTrade(){
 function round2(x){return Math.round(x*100)/100;}
 
 // ── ACTIVE TRADES ─────────────────────────────────────────────
+// Loads all open trades from the backend and shows the active-trades panel.
+// GET /trades triggers run_trade_outcome_check() on the backend, so any
+// target/SL hits that occurred since the last call are already resolved
+// before we filter to status === "open".
 async function loadActiveTrades(){
   try{
     const r=await fetch(`${PROXY}/trades`,{signal:AbortSignal.timeout(20000)});
     const d=await r.json();
     if(!d.ok)return;
+    // Only keep trades still open; target_hit/sl_hit trades are shown in History
     const open=(d.trades||[]).filter(t=>t.status==="open");
     activeTradesCache=open;
     const panel=document.getElementById("activeTrades");
@@ -1719,6 +1838,7 @@ async function loadActiveTrades(){
     cnt.textContent=open.length;
     renderActiveTrades(open,{});
     document.getElementById("activeTradeUpdatedAt").textContent=`Last updated ${new Date().toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"})}`;
+    // Immediately fetch live prices and kick off the 10-second auto-refresh
     await refreshActivePnL();
     startActivePnlAutoRefresh();
   }catch(e){console.warn("[ActiveTrades]",e);}
@@ -1775,8 +1895,12 @@ function renderActiveTrades(open,prices,failed=[]){
   }).join("");
 }
 
+// Fetches live LTP (including today's intraday high/low) for all open trades
+// and re-renders the active-trades panel with current P&L values.
+// After rendering, checks whether any trade's intraday high/low has crossed
+// its T1 or SL — if so, reloads the full trade list to mark the outcome.
 async function refreshActivePnL(){
-  if(activePnlBusy)return;
+  if(activePnlBusy)return;  // prevent overlapping fetches
   try{
     activePnlBusy=true;
     const open=[...activeTradesCache];
@@ -1789,6 +1913,7 @@ async function refreshActivePnL(){
     renderActiveTrades(open,prices,failed);
     document.getElementById("activeTradeUpdatedAt").textContent=`Last updated ${new Date().toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"})}`;
     // Check if any trade has hit T1 or SL using intraday high/low — if so, reload full list
+    // so the backend can mark the outcome and the trade disappears from the active panel.
     const anyHit=open.some(t=>{
       const q=prices[t.symbol];
       if(!q)return false;
@@ -1800,16 +1925,20 @@ async function refreshActivePnL(){
   finally{activePnlBusy=false;}
 }
 
+// Starts the 10-second live P&L auto-refresh.
+// Guards: only runs when the portfolio tab is visible and there are open trades.
 function startActivePnlAutoRefresh(){
   const activeTabVisible=document.getElementById("tab-portfolio")?.classList.contains("active");
   if(activePnlInterval||!activeTradesCache.length||document.hidden||!activeTabVisible)return;
   activePnlInterval=setInterval(refreshActivePnL,10000);
 }
+// Clears the auto-refresh timer (called when switching away from the portfolio tab).
 function stopActivePnlAutoRefresh(){
   if(activePnlInterval){clearInterval(activePnlInterval);activePnlInterval=null;}
 }
 
 // ── HELPERS ───────────────────────────────────────────────────
+// Returns a coloured status badge for a trade's current outcome.
 function statusBadge(status){
   if(status==="open")return`<span class="badge sb-open">● Open</span>`;
   if(status==="target_hit")return`<span class="badge sb-target">✓ Target</span>`;
