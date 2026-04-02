@@ -1828,6 +1828,14 @@ def _to_float(v, default=0.0):
         return default
 
 
+def _to_naive_date(ts_str):
+    """Parse a possibly tz-aware timestamp string and return a tz-naive pd.Timestamp at midnight."""
+    ts = pd.Timestamp(ts_str)
+    if ts.tzinfo is not None:
+        ts = ts.tz_convert("UTC").tz_localize(None)
+    return ts.normalize()
+
+
 def run_trade_outcome_check():
     """Reconcile open trades against historical OHLC and close hit outcomes."""
     if not SB_OK:
@@ -1866,13 +1874,13 @@ def run_trade_outcome_check():
                 return
             explicit_entry = trade.get("entry_date") or trade.get("entered_at")
             if explicit_entry:
-                entry_day = pd.Timestamp(explicit_entry).normalize()
+                entry_day = _to_naive_date(explicit_entry)
             else:
                 scan_ts = trade.get("scanned_at", "")
                 if not scan_ts:
                     return
                 # EOD scan → actual holding starts the next calendar day.
-                entry_day = (pd.Timestamp(scan_ts) + pd.Timedelta(days=1)).normalize()
+                entry_day = (_to_naive_date(scan_ts) + pd.Timedelta(days=1)).normalize()
             # end is exclusive in yfinance – passing today gives candles up to yesterday.
             if entry_day >= today:
                 return
@@ -1945,12 +1953,12 @@ def run_trade_outcome_check():
                 # only be entered tomorrow (EOD-scan → next-day entry).
                 explicit_entry = trade.get("entry_date") or trade.get("entered_at")
                 if explicit_entry:
-                    actual_entry_day = pd.Timestamp(explicit_entry).normalize()
+                    actual_entry_day = _to_naive_date(explicit_entry)
                 else:
                     scan_ts = trade.get("scanned_at", "")
                     if not scan_ts:
                         continue
-                    actual_entry_day = (pd.Timestamp(scan_ts) + pd.Timedelta(days=1)).normalize()
+                    actual_entry_day = (_to_naive_date(scan_ts) + pd.Timedelta(days=1)).normalize()
                 if actual_entry_day > today:
                     continue  # not entered yet; skip today's intraday check
                 quote = ltp_prices.get(sym) or {}
