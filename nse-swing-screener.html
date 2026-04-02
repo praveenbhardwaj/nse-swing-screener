@@ -1615,7 +1615,7 @@ async function checkOutcomes(){
     const r=await fetch(`${PROXY}/check-outcomes`,{method:"POST",signal:AbortSignal.timeout(120000)});
     const d=await r.json();
     d.ok?showToast(`Checked ${d.checked} trades — ${d.updated} updated.`,"ok"):showToast(d.error||"Failed.","err");
-    if(d.ok)await loadHistory();
+    if(d.ok){await loadHistory();await loadActiveTrades();}
   }catch(e){showToast("Network error.","err");}
   finally{btn.disabled=false;btn.textContent="⚡ Check Outcomes";}
 }
@@ -1788,6 +1788,14 @@ async function refreshActivePnL(){
     const failed=ld.failed||[];
     renderActiveTrades(open,prices,failed);
     document.getElementById("activeTradeUpdatedAt").textContent=`Last updated ${new Date().toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"})}`;
+    // Check if any trade has hit T1 or SL using intraday high/low — if so, reload full list
+    const anyHit=open.some(t=>{
+      const q=prices[t.symbol];
+      if(!q)return false;
+      const dh=+(q.day_high||0),dl=+(q.day_low||0);
+      return(dh>0&&dh>=+t.target1)||(dl>0&&dl<=+t.stop_loss);
+    });
+    if(anyHit)await loadActiveTrades();
   }catch(e){console.warn("[RefreshPnL]",e);}
   finally{activePnlBusy=false;}
 }
