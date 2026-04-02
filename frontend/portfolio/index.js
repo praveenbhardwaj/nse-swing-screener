@@ -1,3 +1,20 @@
+/**
+ * index.js — Portfolio module entry point.
+ *
+ * Initialises the portfolio dashboard and wires together:
+ *   - portfolioStore (reactive state)
+ *   - portfolioApi   (HTTP client)
+ *   - Four UI components (recommendations, positions, analytics, history)
+ *
+ * Entry point: window.initPortfolioModule() is called from the main SPA
+ * (nse-swing-screener.html) when the Portfolio tab is first rendered.
+ * It mounts into <div id="portfolioModuleRoot">.
+ *
+ * CRUD flow:
+ *   User action → prompt() → portfolioApi.create/update/delete → refreshAll()
+ *   → store.set(newData) → subscriber re-renders all components
+ */
+
 import { portfolioApi } from "./services/portfolioApi.js";
 import { createPortfolioStore } from "./state/portfolioStore.js";
 import { renderRecommendationsTable } from "./components/RecommendationsTable.js";
@@ -5,8 +22,15 @@ import { renderActivePositionsTable } from "./components/ActivePositionsTable.js
 import { renderPortfolioAnalyticsCards } from "./components/PortfolioAnalyticsCards.js";
 import { renderHistoryTimeline } from "./components/HistoryTimeline.js";
 
+// Single store instance shared across all components for this module mount
 const store = createPortfolioStore();
 
+/**
+ * Prompt the user to enter recommendation details via browser prompts.
+ * Pre-fills fields from an existing row when editing.
+ * @param {object|null} existing - Existing recommendation row or null for create.
+ * @returns {object|null} Payload object for the API, or null if user cancelled.
+ */
 function promptRecommendation(existing) {
   const symbol = prompt("Symbol (e.g. TCS)", existing?.symbol || "");
   if (!symbol) return null;
@@ -24,6 +48,12 @@ function promptRecommendation(existing) {
   };
 }
 
+/**
+ * Prompt the user to enter position details via browser prompts.
+ * Pre-fills fields from an existing row when editing.
+ * @param {object|null} existing - Existing position row or null for create.
+ * @returns {object|null} Payload object for the API, or null if user cancelled.
+ */
 function promptPosition(existing) {
   const symbol = prompt("Symbol (e.g. INFY)", existing?.symbol || "");
   if (!symbol) return null;
@@ -40,6 +70,11 @@ function promptPosition(existing) {
   };
 }
 
+/**
+ * Fetch all portfolio data in parallel and update the store.
+ * All four data sources are fetched simultaneously (Promise.all) to minimise
+ * total latency. On error, sets store.error and clears loading flag.
+ */
 async function refreshAll() {
   store.set({ loading: true, error: "" });
   try {
@@ -61,6 +96,12 @@ async function refreshAll() {
   }
 }
 
+/**
+ * Mount the portfolio dashboard into the given root element.
+ * Creates the DOM structure, wires component renders to store subscription,
+ * and triggers the initial data load.
+ * @param {HTMLElement} root - Container element (typically #portfolioModuleRoot).
+ */
 function mount(root) {
   root.innerHTML = `
     <div class="module-grid">

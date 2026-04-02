@@ -1,7 +1,34 @@
+/**
+ * ActivePositionsTable.js — Active holdings table with live P&L calculation.
+ *
+ * Renders a table of active portfolio_positions rows. For each row, calculates:
+ *   invested = qty × entry_price
+ *   value    = qty × current_price  (current_price refreshed by Flask via LTP API)
+ *   pnl      = value - invested
+ *   pnl_pct  = pnl / invested × 100
+ *
+ * Props:
+ *   targetEl  — DOM element to render into
+ *   positions — array of active position rows (current_price already updated by API)
+ *   onCreate  — async callback for the "+ Add Position" button
+ *   onEdit(id)   — async callback for "Edit" button (receives row UUID)
+ *   onDelete(id) — async callback for "Delete" button (receives row UUID)
+ */
+
+/**
+ * Format a number as Indian Rupees.
+ * @param {number|string} v - Numeric value.
+ * @returns {string} ₹-prefixed formatted string.
+ */
 function fmtMoney(v) {
   return `₹${Number(v || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
 }
 
+/**
+ * Render the active positions table into targetEl.
+ * P&L is colour-coded: green for profit, red for loss.
+ * Shows empty-state message when no active positions exist.
+ */
 export function renderActivePositionsTable({ targetEl, positions, onCreate, onEdit, onDelete }) {
   targetEl.innerHTML = `
     <div class="tbar" style="padding:0 0 10px 0;border:none">

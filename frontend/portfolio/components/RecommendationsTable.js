@@ -1,7 +1,32 @@
+/**
+ * RecommendationsTable.js — Buy/Strong Buy recommendations UI component.
+ *
+ * Renders a table of analyst recommendations with CRUD action buttons.
+ * Uses innerHTML for full re-render on each state change (simple but effective
+ * for the small dataset this component handles).
+ *
+ * Props:
+ *   targetEl        — DOM element to render into
+ *   recommendations — array of recommendation rows from Supabase
+ *   onCreate        — async callback for the "+ Add Recommendation" button
+ *   onEdit(id)      — async callback when "Edit" is clicked (receives row UUID)
+ *   onDelete(id)    — async callback when "Delete" is clicked (receives row UUID)
+ */
+
+/**
+ * Format a number as Indian Rupees (e.g. ₹1,23,456.78).
+ * @param {number|string} v - Numeric value to format.
+ * @returns {string} Formatted currency string.
+ */
 function fmtMoney(v) {
   return `₹${Number(v || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
 }
 
+/**
+ * Render a coloured pill badge for the recommendation rating.
+ * @param {string} rating - 'buy', 'strong_buy', or other.
+ * @returns {string} HTML string for the badge element.
+ */
 function ratingBadge(rating) {
   const val = String(rating || "").toLowerCase();
   if (val === "strong_buy") return '<span class="pill pill-strong">STRONG BUY</span>';
@@ -9,6 +34,11 @@ function ratingBadge(rating) {
   return `<span class="pill">${(rating || "N/A").toUpperCase()}</span>`;
 }
 
+/**
+ * Render the recommendations table into targetEl.
+ * Shows an empty-state message when the recommendations array is empty.
+ * Event listeners are re-attached on every render (innerHTML wipes old ones).
+ */
 export function renderRecommendationsTable({
   targetEl,
   recommendations,

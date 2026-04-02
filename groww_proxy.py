@@ -1,6 +1,21 @@
 """
 NSE Swing Screener — Adaptive Market Regime Engine v3
 ------------------------------------------------------
+A Flask-based backend that screens NSE 500 stocks for swing trade opportunities
+using a 10-step technical methodology that adapts to the current market regime
+(BULL / NEUTRAL / BEAR / CRISIS).
+
+Key capabilities:
+  - Market regime detection via Nifty EMA + India VIX + breadth
+  - Per-stock technical scoring (RSI, MACD, EMA structure, RS vs Nifty, volume)
+  - Async parallel screening with live progress streaming
+  - Trade outcome reconciliation (historical OHLC + intraday LTP)
+  - Portfolio management (positions, recommendations, event audit log)
+  - Dual price source: Groww API (primary) → yfinance (fallback)
+  - Supabase (PostgreSQL) for persistent trade/portfolio storage
+
+Capital model: ₹20,000 per trade | ~1-week hold | ~5% target | ~3.5% SL
+
 Run:  python groww_proxy.py
 Deps: pip install flask flask-cors requests yfinance pandas numpy
 """
@@ -19,28 +34,53 @@ except ImportError:
     YF_OK = False
     print("[ERROR] yfinance missing — run: pip install yfinance pandas numpy")
 
-# ── SUPABASE (plain requests — avoids httpx HTTP/2 issues on Render) ──
+# ══════════════════════════════════════════════════════════════════════
+# SUPABASE CLIENT
+# ══════════════════════════════════════════════════════════════════════
+# We use a custom lightweight client instead of the official supabase-py SDK.
+# Reason: the official SDK uses httpx with HTTP/2, which causes connection
+# issues on Render.com's hosting environment. Plain requests + REST API works
+# reliably on all platforms.
+#
+# Usage mirrors the official SDK's fluent interface:
+#   _sb.table("trades").select("*").eq("status","open").order("scanned_at", desc=True).execute()
+# ══════════════════════════════════════════════════════════════════════
+
 class _SBTable:
+    """Builder for a single Supabase REST API request against one table.
+
+    Supports: select, eq (equality filter), order, insert, update, delete.
+    Call .execute() to dispatch the HTTP request and return a result object
+    with a `.data` list attribute (matching supabase-py's interface).
+    """
+
     def __init__(self, base, headers, table):
         self._base = base; self._headers = headers; self._table = table
         self._filters = {}; self._upd = None
 
     def select(self, cols="*"):
         self._cols = cols; return self
+
     def eq(self, col, val):
+        # Supabase REST filter syntax: ?col=eq.value
         self._filters[col] = f"eq.{val}"; return self
+
     def order(self, col, desc=False):
         self._order = f"{col}.{'desc' if desc else 'asc'}"; return self
+
     def insert(self, rows):
         self._rows = rows; return self
+
     def update(self, data):
         self._upd = data; return self
+
     def delete(self):
         self._del = True; return self
 
     def execute(self):
         url = f"{self._base}/rest/v1/{self._table}"
         params = {k: v for k, v in self._filters.items()}
+        # "Prefer: return=representation" tells Supabase to return the affected rows
         h = {**self._headers, "Prefer": "return=representation"}
         if getattr(self, "_del", False):
             r = requests.delete(url, headers=h, params=params, timeout=15)
@@ -55,15 +95,20 @@ class _SBTable:
             r = requests.get(url, headers=h, params=params, timeout=15)
         r.raise_for_status()
         data = r.json() if r.content else []
+        # Wrap in a simple result object so callers can do .data
         return type("R", (), {"data": data if isinstance(data, list) else []})()
 
 
 class _SBClient:
+    """Supabase project client. Create one instance at startup and reuse."""
+
     def __init__(self, url, key):
         self._base = url.rstrip("/")
         self._h = {"apikey": key, "Authorization": f"Bearer {key}",
                    "Content-Type": "application/json"}
+
     def table(self, name):
+        """Return a new _SBTable builder for the named table."""
         return _SBTable(self._base, self._h, name)
 
 
@@ -81,24 +126,41 @@ except Exception as _sb_err:
     _sb = None; SB_OK = False
     print(f"[Supabase] Not configured — {_sb_err}")
 
-# ── GROWW CREDENTIALS ────────────────────────────────────────────────
-# Keep credentials out of source; load from env if available.
+# ══════════════════════════════════════════════════════════════════════
+# GROWW API AUTH
+# ══════════════════════════════════════════════════════════════════════
+# Groww uses a SHA-256 checksum scheme:
+#   checksum = SHA256(api_secret + unix_timestamp_string)
+#   POST /v1/token/api/access → returns bearer access_token (~4h TTL)
+#
+# Credentials priority (highest → lowest):
+#   1. Session-level override via POST /set-credentials (stored in _session_*)
+#   2. Environment variables GROWW_API_KEY / GROWW_API_SECRET
+#
+# If neither is available, live price falls back to yfinance.
+# ══════════════════════════════════════════════════════════════════════
+
+# Load from environment (never hardcode secrets in source)
 API_KEY    = os.environ.get("GROWW_API_KEY", "").strip()
 API_SECRET = os.environ.get("GROWW_API_SECRET", "").strip()
 BASE_URL   = "https://api.groww.in/v1"
 
 app = Flask(__name__)
-CORS(app)
+CORS(app)  # Allow cross-origin requests from the Netlify-hosted frontend
 
-# ── GROWW AUTH ───────────────────────────────────────────────────────
+# Thread-safe token cache. Token is reused for 4 hours (14400 seconds).
 _access_token = None; _token_fetched_at = 0
+# Session-level credential override (set via POST /set-credentials)
 _session_api_key = None; _session_api_secret = None
-_cred_lock = threading.Lock()
+_cred_lock = threading.Lock()  # Protects _session_* and token cache
 
 def generate_checksum(secret, timestamp):
+    """Create SHA-256 authentication signature: SHA256(secret + timestamp)."""
     return hashlib.sha256((secret + timestamp).encode()).hexdigest()
 
+
 def _token_error_details(resp):
+    """Extract structured error info from a failed Groww token response."""
     try:
         payload = resp.json()
     except Exception:
@@ -108,11 +170,19 @@ def _token_error_details(resp):
         "payload": payload,
     }
 
+
 def _request_access_token(key, secret):
+    """Attempt to obtain a Groww access token.
+
+    The Groww token endpoint has been observed to accept different request body
+    formats across SDK versions. We try three formats in sequence and return the
+    first that succeeds. Returns (token_str, None) on success or (None, error_dict).
+    """
     if not key or not secret:
         return None, {"message": "Missing API key/secret"}
     ts = str(int(time.time()))
     checksum = generate_checksum(secret, ts)
+    # Try multiple body formats — Groww API is inconsistent across SDK versions
     bodies = [
         {"key_type": "approval", "checksum": checksum, "timestamp": ts},
         {"checksum": checksum, "timestamp": ts},
@@ -131,6 +201,7 @@ def _request_access_token(key, secret):
             continue
         details = _token_error_details(resp)
         if resp.status_code == 429:
+            # Rate limited — surface the Retry-After header to the caller
             retry_after = resp.headers.get("Retry-After")
             details["message"] = "Groww rate limit reached. Please wait and retry."
             if retry_after:
@@ -148,11 +219,19 @@ def _request_access_token(key, secret):
         "attempts": attempt_errors[:3],
     }
 
+
 def get_access_token(force=False):
+    """Return a valid Groww access token, refreshing if expired or forced.
+
+    Token is cached for 4 hours (14400 seconds). Thread-safe credential read.
+    Returns None if credentials are missing or Groww rejects them.
+    """
     global _access_token, _token_fetched_at
+    # Use cached token if fresh and not force-refreshing
     if _access_token and not force and (time.time() - _token_fetched_at) < 14400:
         return _access_token
     with _cred_lock:
+        # Session override takes priority over environment variables
         key = _session_api_key or API_KEY
         secret = _session_api_secret or API_SECRET
     tok, err = _request_access_token(key, secret)
@@ -163,7 +242,9 @@ def get_access_token(force=False):
     print(f"[Auth] Token fetch failed: {err}")
     return None
 
+
 def groww_headers():
+    """Build Groww API request headers with current bearer token."""
     return {"Authorization": f"Bearer {get_access_token()}",
             "Accept": "application/json", "X-API-VERSION": "1.0"}
 
@@ -177,21 +258,38 @@ REGIME_NEUTRAL = "NEUTRAL"
 REGIME_BEAR    = "BEAR"
 REGIME_CRISIS  = "CRISIS"
 
+# Cache regime for 15 minutes to avoid hammering yfinance on every request
 _regime_cache = {"regime": None, "data": {}, "fetched_at": 0}
 _regime_lock  = threading.Lock()
-REGIME_TTL    = 900
+REGIME_TTL    = 900  # seconds
 
 
 def detect_market_regime():
+    """Classify current market into BULL / NEUTRAL / BEAR / CRISIS.
+
+    Classification uses three signals:
+      1. Nifty 50 price vs EMA50 and EMA200 (trend direction)
+      2. India VIX (fear/volatility level)
+      3. Nifty 500 Advance/Decline ratio (market breadth)
+
+    Classification rules (evaluated in priority order):
+      CRISIS  → VIX > 28  AND price below EMA200
+      BEAR    → price below EMA50 AND VIX > 20
+      BULL    → price above EMA50 AND VIX < 15 AND A/D ratio > 1.5
+      NEUTRAL → all other cases (default)
+
+    Result is cached for REGIME_TTL (15 min). Returns the full cache dict.
+    """
     with _regime_lock:
         c = _regime_cache
         if c["regime"] is not None and time.time() - c["fetched_at"] < REGIME_TTL:
             return c
 
     regime_data = {}
-    regime      = REGIME_NEUTRAL
+    regime      = REGIME_NEUTRAL  # safe default
 
     try:
+        # Signal 1: Nifty 50 trend — 1-year daily closes for accurate EMA50/200
         nifty = yf.Ticker("^NSEI").history(period="1y", interval="1d", auto_adjust=True)
         if not nifty.empty:
             closes    = nifty["Close"].dropna().values.astype(float)
@@ -207,10 +305,12 @@ def detect_market_regime():
                 "above_200dma": above_200, "nifty_10d_ret": round(ret_10d, 2),
             })
 
+        # Signal 2: India VIX — fear gauge (5d is sufficient for latest reading)
         vix_hist = yf.Ticker("^INDIAVIX").history(period="5d", interval="1d", auto_adjust=True)
         vix_val  = float(vix_hist["Close"].dropna().iloc[-1]) if not vix_hist.empty else 18.0
         regime_data["vix"] = round(vix_val, 2)
 
+        # Signal 3: Market breadth — Nifty 500 advance/decline ratio
         breadth  = _prefetch_market_breadth()
         ad_ratio = breadth.get("ratio", 1.0)
         regime_data["ad_ratio"] = ad_ratio
@@ -218,14 +318,15 @@ def detect_market_regime():
         above_50  = regime_data.get("above_50dma",  True)
         above_200 = regime_data.get("above_200dma", True)
 
+        # Classification (evaluated top-to-bottom; first match wins)
         if vix_val > 28 and not above_200:
-            regime = REGIME_CRISIS
+            regime = REGIME_CRISIS   # extreme fear + below long-term trend
         elif (not above_50) and vix_val > 20:
-            regime = REGIME_BEAR
+            regime = REGIME_BEAR     # below medium-term trend + elevated fear
         elif above_50 and vix_val < 15 and ad_ratio > 1.5:
-            regime = REGIME_BULL
+            regime = REGIME_BULL     # trending up, calm, broad participation
         else:
-            regime = REGIME_NEUTRAL
+            regime = REGIME_NEUTRAL  # mixed signals
 
         regime_data["regime"] = regime
         print(f"[Regime] {regime} | VIX={vix_val:.1f} | above50={above_50} | AD={ad_ratio:.2f}")
@@ -241,6 +342,29 @@ def detect_market_regime():
 
 
 def get_regime_config(regime):
+    """Return filter thresholds and scoring weights for the given regime.
+
+    Each regime loosens or tightens the screening funnel:
+      - BULL:   relaxed RSI range, lower score threshold, STRONG BUY allowed
+      - NEUTRAL: standard thresholds
+      - BEAR:   tighter RSI, RS filter required, no-gap required, higher score threshold
+      - CRISIS: strictest RSI, volume 2x required, higher lows required,
+                Bollinger sweet-spot required, STRONG BUY disabled (score=999)
+
+    Key parameters:
+      rsi_min/max         — acceptable RSI range for passing stocks
+      vol_min             — minimum last-3d vol ratio vs 20d average
+      rs_required         — whether relative strength vs Nifty is mandatory
+      higher_lows_req     — require 3 consecutive higher lows (accumulation pattern)
+      no_gap_req          — reject stocks with recent gap-down
+      bb_filter_req       — require price in Bollinger sweet spot
+      atr_max_pct         — maximum allowed ATR% (rejects hyper-volatile stocks)
+      min_score           — minimum composite score to pass
+      strong_buy_score    — score needed for STRONG BUY signal
+      buy_score           — score needed for BUY signal
+      sl_atr_mult         — ATR multiplier for stop-loss sizing (narrower in crisis)
+      min_rr              — minimum required risk-reward ratio
+    """
     configs = {
         REGIME_BULL: {
             "rsi_min": 45, "rsi_max": 68, "vol_min": 1.2,
@@ -291,17 +415,32 @@ def get_regime_config(regime):
 # ══════════════════════════════════════════════════════════════════════
 
 def calc_rsi(closes, period=14):
+    """Calculate 14-period RSI using Wilder's EWM smoothing.
+
+    Uses exponential weighted moving average (alpha=1/period) rather than
+    simple moving average to match the industry-standard Wilder's RSI formula.
+    Returns a pandas Series the same length as closes, filled with 50 on NaN.
+    """
     s = pd.Series(closes, dtype=float)
     delta = s.diff()
+    # Separate gains (positive deltas) and losses (negative deltas, flipped positive)
     gain  = delta.clip(lower=0).ewm(alpha=1/period, adjust=False).mean()
     loss  = (-delta.clip(upper=0)).ewm(alpha=1/period, adjust=False).mean()
-    rs    = gain / loss.replace(0, np.nan)
+    rs    = gain / loss.replace(0, np.nan)  # avoid division by zero
     return (100 - 100 / (1 + rs)).fillna(50)
 
+
 def calc_ema(closes, period):
+    """Calculate Exponential Moving Average for the given period."""
     return pd.Series(closes, dtype=float).ewm(span=period, adjust=False).mean()
 
+
 def calc_macd_signal(closes, fast=12, slow=26, sig_period=9):
+    """Return simple MACD state string: 'bullish', 'bearish', or 'neutral'.
+
+    Legacy helper — use calc_macd_full() for the full result including
+    histogram value and 5-day crossover detection.
+    """
     closes = pd.Series(closes, dtype=float)
     if len(closes) < slow + sig_period:
         return "neutral"
@@ -343,18 +482,34 @@ def calc_macd_full(closes, fast=12, slow=26, sig_period=9):
     return signal, round(hist_now, 4), crossover_5d
 
 def calc_atr(highs, lows, closes, period=14):
+    """Calculate Average True Range (ATR) and ATR as % of current price.
+
+    True Range = max(High-Low, |High-PrevClose|, |Low-PrevClose|)
+    ATR is smoothed using EWM (Wilder's method: alpha=1/period).
+    Returns (atr_absolute, atr_percentage) or (None, None) if insufficient data.
+    """
     h = np.array(highs, dtype=float)
     l = np.array(lows,  dtype=float)
     c = np.array(closes, dtype=float)
     if len(c) < period + 1:
         return None, None
+    # True range: max of three measures accounting for overnight gaps
     tr  = np.maximum(h[1:] - l[1:],
           np.maximum(np.abs(h[1:] - c[:-1]), np.abs(l[1:] - c[:-1])))
     atr     = float(pd.Series(tr).ewm(alpha=1/period, adjust=False).mean().iloc[-1])
     atr_pct = atr / c[-1] * 100
     return round(atr, 2), round(atr_pct, 2)
 
+
 def calc_adx(highs, lows, closes, period=14):
+    """Calculate Average Directional Index (ADX) — trend strength indicator.
+
+    ADX measures trend strength regardless of direction (0 = sideways, 100 = strong trend).
+    ADX < 20: sideways / consolidating
+    ADX > 25: confirmed trend (used as optional entry filter via adx_min param)
+
+    Returns ADX value (float) or None if insufficient data.
+    """
     h = np.array(highs,  dtype=float)
     l = np.array(lows,   dtype=float)
     c = np.array(closes, dtype=float)
@@ -362,21 +517,31 @@ def calc_adx(highs, lows, closes, period=14):
         return None
     tr    = np.maximum(h[1:] - l[1:],
             np.maximum(np.abs(h[1:] - c[:-1]), np.abs(l[1:] - c[:-1])))
-    up    = h[1:] - h[:-1]
-    down  = l[:-1] - l[1:]
-    dm_p  = np.where((up > down) & (up > 0),   up,   0.0)
-    dm_m  = np.where((down > up) & (down > 0), down, 0.0)
+    up    = h[1:] - h[:-1]    # upward movement
+    down  = l[:-1] - l[1:]    # downward movement
+    dm_p  = np.where((up > down) & (up > 0),   up,   0.0)  # +DM
+    dm_m  = np.where((down > up) & (down > 0), down, 0.0)  # -DM
     atr14 = pd.Series(tr).ewm(alpha=1/period, adjust=False).mean()
     dip14 = pd.Series(dm_p).ewm(alpha=1/period, adjust=False).mean()
     dim14 = pd.Series(dm_m).ewm(alpha=1/period, adjust=False).mean()
-    di_p  = 100 * dip14 / atr14.replace(0, np.nan)
-    di_m  = 100 * dim14 / atr14.replace(0, np.nan)
+    di_p  = 100 * dip14 / atr14.replace(0, np.nan)  # +DI
+    di_m  = 100 * dim14 / atr14.replace(0, np.nan)  # -DI
     dx    = 100 * np.abs(di_p - di_m) / (di_p + di_m).replace(0, np.nan)
     adx   = dx.ewm(alpha=1/period, adjust=False).mean()
     val   = float(adx.iloc[-1])
     return round(val, 1) if not np.isnan(val) else None
 
+
 def calc_bollinger_position(closes, period=20, std_dev=2):
+    """Calculate Bollinger Band position of current price.
+
+    Returns (position_str, upper, middle, lower):
+      - 'above_upper' : price extended beyond upper band (overbought zone)
+      - 'sweet_spot'  : price between middle and upper band (ideal zone)
+      - 'below_middle': price below the 20-day SMA (weak price action)
+
+    CRISIS regime requires 'sweet_spot' to confirm controlled momentum.
+    """
     s = pd.Series(closes, dtype=float)
     if len(s) < period:
         return "unknown", None, None, None
@@ -390,14 +555,26 @@ def calc_bollinger_position(closes, period=20, std_dev=2):
     else:               pos = "below_middle"
     return pos, round(upper, 2), round(mid, 2), round(lower, 2)
 
+
 def check_higher_lows(lows, n=3):
+    """Check if the last n candle lows are sequentially higher (accumulation pattern).
+
+    Used in BEAR/CRISIS regime as an additional confirmation that sellers are
+    losing control and buyers are defending higher price levels each dip.
+    """
     vals = [float(x) for x in lows[-(n+1):] if not np.isnan(float(x))]
     if len(vals) < n:
         return False
     vals = vals[-n:]
     return all(vals[i] > vals[i-1] for i in range(1, n))
 
+
 def check_no_gap_down(opens, closes, threshold=0.015, n=5):
+    """Return False if any candle in the last n days opened >1.5% below prior close.
+
+    Gap-downs indicate institutional selling or panic. In BEAR/CRISIS regimes,
+    stocks with recent gap-downs are excluded to avoid catching falling knives.
+    """
     o = list(opens[-(n):]); c = list(closes[-(n+1):-1])
     for op, pc in zip(o, c):
         if float(pc) > 0 and (float(pc) - float(op)) / float(pc) > threshold:
@@ -405,7 +582,18 @@ def check_no_gap_down(opens, closes, threshold=0.015, n=5):
     return True
 
 def calc_relative_strength(stock_closes, nifty_closes):
-    """Step 2: Relative strength — 5-day AND 10-day vs Nifty (OR condition)."""
+    """Step 2: Relative strength — stock return vs Nifty over 5d and 10d windows.
+
+    This is the #1 most important filter. A stock outperforming the index even
+    while the market falls signals institutional accumulation.
+
+    Logic (OR condition — either window passing is sufficient):
+      rs_5d_ok  = stock_5d_return > nifty_5d_return + 1.5%
+      rs_10d_ok = stock_10d_return > nifty_10d_return + 2.0%
+      rs_ok     = rs_5d_ok OR rs_10d_ok
+
+    In BEAR/CRISIS: rs_ok is further AND'd with (stock outperforms its sector).
+    """
     res = {"s_ret_5d": None, "n_ret_5d": None, "rs_5d_ok": None,
            "s_ret_10d": None, "n_ret_10d": None, "rs_10d_ok": None, "rs_ok": False}
     if len(stock_closes) >= 6 and len(nifty_closes) >= 6:
@@ -423,11 +611,20 @@ def calc_relative_strength(stock_closes, nifty_closes):
     return res
 
 def calc_relative_strength_10d(stock_closes, nifty_closes):
-    """Backward-compat alias — use calc_relative_strength instead."""
+    """Backward-compatible alias returning only the 10-day RS tuple.
+
+    Prefer calc_relative_strength() for new code — it returns both 5d and 10d.
+    """
     rs = calc_relative_strength(stock_closes, nifty_closes)
     return rs["s_ret_10d"], rs["n_ret_10d"], rs["rs_10d_ok"]
 
 def calc_rs_vs_sector(stock_closes, sector_closes):
+    """Compare 10-day stock return vs its sector index ETF return.
+
+    Used as an additional relative-strength gate in BEAR/CRISIS regimes.
+    If sector_closes is None (sector not mapped to a yfinance index), returns
+    (None, None, None) and the gate passes by default.
+    """
     if sector_closes is None or len(sector_closes) < 11 or len(stock_closes) < 11:
         return None, None, None
     sc      = stock_closes[-11:]; sec = sector_closes[-11:]
@@ -436,6 +633,12 @@ def calc_rs_vs_sector(stock_closes, sector_closes):
     return round(s_ret, 2), round(sec_ret, 2), s_ret > sec_ret
 
 def calc_52wk_proximity(closes_1y, highs_1y):
+    """Return how far (%) the current price is below the 52-week high.
+
+    Used in two hard exclusion rules (Step 1):
+      - pct_below < 2%  → overstretched (within 2% of 52wk high, reject)
+      - pct_below > 35% → potential falling knife (reject unless recovery signal)
+    """
     price     = float(closes_1y[-1])
     hi52      = float(np.nanmax(highs_1y))
     pct_below = (hi52 - price) / hi52 * 100 if hi52 > 0 else 0
@@ -470,7 +673,16 @@ def check_ma_structure(closes, ema20_s, ema50_s, ema200_s, rsi_s):
     met = sum([cond_a, cond_b, cond_c, cond_d])
     return met >= 1, met, {"a": cond_a, "b": cond_b, "c": cond_c, "d": cond_d}
 
-# Step 7: Sector bonus scoring
+# ══════════════════════════════════════════════════════════════════════
+# SECTOR BONUS (Step 7)
+# ══════════════════════════════════════════════════════════════════════
+# Sector context adjusts the composite score (not a hard filter).
+# Sectors with confirmed FII inflows or macro tailwinds get bonus points;
+# sectors facing headwinds get penalty points.
+#
+# Bonus scale: raw +3 → +10 score pts | raw -2 → -7 score pts
+# ══════════════════════════════════════════════════════════════════════
+
 _SECTOR_BONUS_RULES = [
     (["energy", "coal", "oil & gas", "oil and gas", "crude", "petroleum", "power"], 3),
     (["pharma", "pharmaceutical", "healthcare", "health care", "medicine", "drug"], 3),
@@ -482,13 +694,19 @@ _SECTOR_BONUS_RULES = [
 ]
 
 def get_sector_bonus(sector):
+    """Return sector bonus points by matching sector string against keyword rules.
+
+    Uses substring matching (case-insensitive) against _SECTOR_BONUS_RULES.
+    Returns the first match's points, or 0 if no rule matches.
+    """
     s = (sector or "").lower()
     for keywords, pts in _SECTOR_BONUS_RULES:
         if any(kw in s for kw in keywords):
             return pts
     return 0
 
-# IT sector symbols to hard-exclude (Step 1)
+# Hard exclusion set for Step 1: IT sector is excluded because a separate
+# dedicated IT trade is assumed to be running in parallel.
 _IT_SECTOR_NAMES = {"information technology", "it", "software", "technology"}
 
 def fetch_fundamentals_quick(symbol):
@@ -558,16 +776,31 @@ def generate_rationale(r):
     return " | ".join(reasons[:3]) if reasons else "Passes all technical filters", risk
 
 def calc_volume_quality(volumes, n_recent=3, n_avg=20):
+    """Measure recent volume vs 20-day baseline (Step 6: Volume Confirmation).
+
+    Computes avg_ratio = mean(last 3 days volume) / mean(prior 20 days volume).
+    consistency = True if ALL of the last 3 days individually exceeded the baseline.
+
+    Returns (avg_ratio, consistency_bool).
+    A ratio >= 1.2 is the minimum threshold (regime-configurable via vol_min).
+    """
     if len(volumes) < n_avg + n_recent:
         return 0.0, False
+    # Baseline: 20 days ending 3 days before today (exclude recent days from baseline)
     avg    = float(np.mean(volumes[-(n_avg + n_recent):-(n_recent)]))
     recent = volumes[-n_recent:]
     ratios = [float(v) / avg for v in recent if avg > 0]
     avg_ratio   = float(np.mean(ratios)) if ratios else 0.0
-    consistency = all(r > 1.0 for r in ratios)
+    consistency = all(r > 1.0 for r in ratios)  # every recent day above average
     return round(avg_ratio, 2), consistency
 
+
 def calc_price_momentum(closes, periods=(5, 10, 20)):
+    """Calculate price return over multiple lookback periods.
+
+    Returns dict: {"5d": float, "10d": float, "20d": float} — each is % change.
+    Used for informational output, not as a filter gate.
+    """
     result = {}; price = float(closes[-1])
     for p in periods:
         if len(closes) > p:
@@ -577,7 +810,17 @@ def calc_price_momentum(closes, periods=(5, 10, 20)):
             result[f"{p}d"] = None
     return result
 
+
 def detect_consolidation_breakout(closes, highs, lows, lookback=15):
+    """Detect a price breakout from a tight consolidation range.
+
+    Conditions:
+      - 15-day price range (high-low) was < 8% (tight compression)
+      - Today's close is > 15-day high + 0.5% (confirmed breakout)
+
+    Returns (is_breakout: bool, range_pct: float).
+    Informational — not used as a hard filter, included in result for UI display.
+    """
     if len(closes) < lookback + 2:
         return False, None
     past_highs = highs[-(lookback+1):-1]; past_lows = lows[-(lookback+1):-1]
@@ -713,7 +956,15 @@ _NIFTY_MIDCAP_FALLBACK = {
 }
 
 def _build_fallback_universe(scope):
-    """Return a hardcoded universe when all live sources fail."""
+    """Return a hardcoded stock universe when all live NSE data sources fail.
+
+    Fallback coverage:
+      NIFTY 50  → 50 stocks (always included)
+      NIFTY 100 and larger → adds Next50 + Midcap (~200 stocks total)
+
+    This ensures the screener always has something to scan even when NSE
+    archives and the NSE API are unreachable (common on cloud platforms).
+    """
     base = {s: {"symbol": s, "name": s, "sector": sec, "industry": sec}
             for s, sec in _NIFTY50_FALLBACK.items()}
     if scope in ("NIFTY 50",):
@@ -837,32 +1088,47 @@ def _fetch_index_csv(index_name):
     return {}
 
 def fetch_universe(scope="NIFTY 500"):
+    """Fetch the NSE stock universe for the given scope using a 3-layer fallback.
+
+    Layer 1: NSE archive CSV (fast when accessible, often blocked on cloud IPs)
+    Layer 2: NSE direct API (requires cookie session handshake)
+    Layer 3: Hardcoded dicts (always works, covers ~200 well-known stocks)
+
+    Returns a list of stock dicts: [{symbol, name, sector, industry}, ...]
+    Duplicate symbols across indices are deduplicated via the merged dict.
+    """
     indices = UNIVERSE_INDICES.get(scope, ["NIFTY 500"])
     merged = {}
     for idx in indices:
-        # Layer 1: CSV sources (NSE archive + GitHub mirror)
+        # Layer 1: CSV sources (NSE archive + optional GitHub mirror)
         data = _fetch_index_csv(idx)
         if data:
             merged.update(data)
             continue
-        # Layer 2: NSE API with cookie session
+        # Layer 2: NSE API with cookie session (slower, needs browser-like headers)
         print(f"[Universe] CSV/GitHub failed for {idx}, trying NSE API…")
         session = _nse_session()
         api_data = _fetch_index(session, idx)
         if api_data:
             merged.update(api_data)
-            time.sleep(0.3)
+            time.sleep(0.3)  # polite delay between NSE API calls
             continue
-        # Layer 3: hardcoded fallback (always works)
+        # Layer 3: hardcoded fallback — guaranteed to always produce results
         print(f"[Universe] NSE API also failed for {idx}, using hardcoded fallback")
         for stock in _build_fallback_universe(scope):
             merged[stock["symbol"]] = stock
-        break   # fallback covers entire scope, skip remaining indices
+        break   # fallback covers the entire scope, no need to process remaining indices
     result = list(merged.values())
     print(f"[Universe] {scope}: {len(result)} stocks total")
     return result
 
+
 def get_universe(scope="NIFTY 500"):
+    """Cached wrapper for fetch_universe(). Cache TTL = 1 hour (UNIVERSE_TTL).
+
+    Uses a thread lock to avoid duplicate fetches when multiple requests
+    arrive simultaneously (e.g. at scan start).
+    """
     with _universe_lock:
         c = _universe_cache
         if (c["data"] is not None and c["index"] == scope
@@ -878,14 +1144,38 @@ def get_universe(scope="NIFTY 500"):
 # CONTEXT PRE-FETCH
 # ══════════════════════════════════════════════════════════════════════
 
+# ══════════════════════════════════════════════════════════════════════
+# CONTEXT PRE-FETCH
+# ══════════════════════════════════════════════════════════════════════
+# Before scanning individual stocks, the scan_worker pre-fetches shared
+# market data once and passes it to every analyze_stock() call via the
+# context dict. This avoids repeated network calls for the same data.
+#
+# Pre-fetched context keys:
+#   nifty_closes   — 3-month Nifty closes (for relative strength calculation)
+#   sector_ema     — {sector: above_ema20 bool} (for sector momentum filter)
+#   sector_closes  — {sector: closes array} (for RS vs sector in BEAR/CRISIS)
+#   earnings_syms  — set of symbols with earnings in next 5 days
+#   inst_syms      — set of symbols with recent FII/DII block/bulk deals
+#   breadth        — {advances, declines, ratio, breadth_ok}
+# ══════════════════════════════════════════════════════════════════════
+
 def _prefetch_nifty_closes():
+    """Fetch 3 months of Nifty 50 daily closes for relative strength calculations."""
     try:
         hist = yf.Ticker("^NSEI").history(period="3mo", interval="1d", auto_adjust=True)
         return hist["Close"].dropna().values.astype(float)
     except Exception as e:
         print(f"[Ctx] Nifty: {e}"); return np.array([])
 
+
 def _prefetch_sector_closes():
+    """Fetch 2-month daily closes for all mapped sector indices.
+
+    Deduplicates yfinance calls: sectors sharing the same index symbol
+    (e.g. PHARMA and HEALTHCARE both map to ^CNXPHARMA) are fetched once.
+    Sectors not in SECTOR_YF map return None (their RS vs sector gate passes).
+    """
     result = {}; fetched_syms = {}
     for sector, yf_sym in SECTOR_YF.items():
         if yf_sym in fetched_syms:
@@ -899,6 +1189,12 @@ def _prefetch_sector_closes():
     return result
 
 def _prefetch_sector_ema(sectors):
+    """Check whether each sector index is currently above its 20-day EMA.
+
+    Used by the sector_momentum filter: stocks in sectors below EMA20 are
+    rejected (the sector itself is weak, individual stock strength is suspect).
+    Defaults to True (pass) for any sector not mapped in SECTOR_YF.
+    """
     needed = {}
     for s in sectors:
         yf_sym = SECTOR_YF.get(s.upper())
@@ -910,11 +1206,18 @@ def _prefetch_sector_ema(sectors):
             closes = hist["Close"].dropna().values.astype(float)
             above  = len(closes) >= 20 and float(closes[-1]) > float(calc_ema(closes, 20).iloc[-1])
         except Exception:
-            above = True
+            above = True  # fail-safe: don't penalise stocks when sector data is unavailable
         for s in sector_names: result[s] = above
     return result
 
+
 def _prefetch_earnings_symbols():
+    """Fetch NSE event calendar and return symbols with earnings in the next 5 days.
+
+    Used by the earnings_filter param: stocks with imminent results are excluded
+    to avoid buying into binary event risk.
+    Returns an empty set if the NSE API is unavailable.
+    """
     syms = set()
     try:
         session = _nse_session()
@@ -934,7 +1237,14 @@ def _prefetch_earnings_symbols():
     print(f"[Earnings] {len(syms)} symbols with upcoming results")
     return syms
 
+
 def _prefetch_institutional_symbols():
+    """Fetch NSE block-deal and bulk-deal records to identify FII/DII activity.
+
+    Used by the fii_dii_filter param: only stocks with recent institutional
+    deal activity are passed. This helps confirm institutional conviction.
+    Returns an empty set if the NSE API is unavailable.
+    """
     syms = set()
     try:
         session = _nse_session()
@@ -950,7 +1260,14 @@ def _prefetch_institutional_symbols():
     print(f"[Institutional] {len(syms)} symbols with recent deals")
     return syms
 
+
 def _prefetch_market_breadth():
+    """Fetch Nifty 500 advance/decline data from NSE API.
+
+    breadth_ok = True when A/D ratio >= 1.2 (more advancers than decliners).
+    Used to downgrade STRONG BUY → BUY in BEAR/CRISIS when breadth is poor.
+    Returns safe defaults (ratio=1.0, breadth_ok=True) on failure.
+    """
     try:
         session = _nse_session()
         r = session.get("https://www.nseindia.com/api/equity-stockIndices",
@@ -966,9 +1283,16 @@ def _prefetch_market_breadth():
                     "unchanged": unchanged, "ratio": ratio, "breadth_ok": ratio >= 1.2}
     except Exception as e:
         print(f"[Breadth] {e}")
+    # Safe defaults: assume neutral breadth to avoid blocking all signals
     return {"advances": 0, "declines": 0, "unchanged": 0, "ratio": 1.0, "breadth_ok": True}
 
+
 def _fetch_delivery_pct(symbol, session):
+    """Fetch delivery-to-traded-quantity % for a symbol from NSE trade info API.
+
+    High delivery % (>50%) indicates genuine buying interest (not intraday).
+    Used by the delivery_min filter param. Returns None if unavailable.
+    """
     try:
         r = session.get("https://www.nseindia.com/api/quote-equity",
                         params={"symbol": symbol, "type": "trade_info"},
@@ -986,6 +1310,12 @@ def _fetch_delivery_pct(symbol, session):
 # ══════════════════════════════════════════════════════════════════════
 
 def fetch_ohlcv(symbol):
+    """Fetch 1-year daily OHLCV data for an NSE symbol via yfinance.
+
+    Uses the .NS suffix for NSE-listed stocks (e.g. RELIANCE.NS).
+    Returns None if: yfinance unavailable, symbol not found, or < 20 candles.
+    Minimum 20 candles required for EMA20 calculation in analyze_stock().
+    """
     if not YF_OK: return None
     try:
         df = yf.Ticker(f"{symbol}.NS").history(
@@ -996,6 +1326,32 @@ def fetch_ohlcv(symbol):
 
 
 def analyze_stock(sym_info, df, params, context):
+    """Apply the 10-step regime-adaptive screening funnel to a single stock.
+
+    Args:
+        sym_info: dict with {symbol, name, sector, industry}
+        df:       pandas DataFrame with OHLCV columns (1-year daily, from fetch_ohlcv)
+        params:   dict of user-specified filter overrides from the /screen request
+        context:  dict of pre-fetched shared market data (Nifty closes, sector data,
+                  earnings symbols, breadth, etc.) from scan_worker
+
+    Returns:
+        dict with "rejected": True and reason string if the stock fails any gate,
+        OR a full result dict (40+ keys) with score, signal, targets, rationale.
+
+    Step order:
+        Step 1  — Universe hard filters (IT exclusion, 52-week extremes)
+        Step 3  — RSI filter (momentum sweet spot)
+        Step 4  — MA structure (4 OR-conditions)
+        Step 5  — MACD filter (histogram or crossover)
+        Step 6  — Volume confirmation (1.2x+ 20d avg)
+        Step 2  — Relative strength vs Nifty (applied after soft gates)
+        Optional— Higher lows, gap-down, Bollinger, ATR, ADX, sector/earnings/FII/delivery
+        Step 8  — Fundamental check (PE, ROE, D/E — optional, slow)
+        Step 9  — Composite scoring (100-point scale)
+        Step 10 — Signal classification (STRONG BUY / BUY / WATCH)
+                  + Target & SL calculation
+    """
     try:
         closes  = df["Close"].dropna().values.astype(float)
         volumes = df["Volume"].dropna().values.astype(float)
@@ -1175,65 +1531,74 @@ def analyze_stock(sym_info, df, params, context):
         fundamentals = fetch_fundamentals_quick(sym)
 
     # ── STEP 9: FINAL SCORING (100-pt fixed breakdown) ────────────
+    # Composite score determines ranking and signal classification.
+    # Weights reflect the screening methodology priority:
+    #   RS vs Nifty (25) > RSI (15) = MA (15) > MACD (10) = Volume (10)
+    #   = Sector (10) = Fundamentals (10) > 52-week range (5)
     score = 0
 
-    # RS vs Nifty 5-day: max 25 pts
+    # RS vs Nifty 5-day: max 25 pts (most important factor)
+    # Scale: +5% outperformance = 25pts, +2% = 15pts, +1% = 10pts, ≥0% = 5pts
     diff5 = ((s_ret_5d or 0) - (n_ret_5d or 0))
     if diff5 >= 5:    score += 25
     elif diff5 >= 2:  score += 15
     elif diff5 >= 1:  score += 10
     elif diff5 >= 0:  score += 5
 
-    # RSI sweet spot: max 15 pts
+    # RSI sweet spot: max 15 pts (55–65 is the ideal momentum zone)
     if 55 <= rsi_val <= 65:    score += 15
     elif 50 <= rsi_val < 55:   score += 10
     elif 45 <= rsi_val < 50 or 65 < rsi_val <= 68: score += 5
 
-    # MA alignment: max 15 pts (proportional to conditions met)
+    # MA alignment: max 15 pts (5 pts per OR-condition met, up to 3 conditions)
     score += min(15, ma_conds_met * 5)
 
-    # MACD: max 10 pts
+    # MACD: max 10 pts (bullish state > fresh crossover > positive histogram)
     if macd_sig == "bullish":    score += 10
     elif macd_cross_5d:          score += 7
     elif macd_hist > 0:          score += 4
 
-    # Volume confirmation: max 10 pts
+    # Volume confirmation: max 10 pts (institutional participation)
     if vol_ratio >= 2.0:         score += 10
     elif vol_ratio >= 1.5:       score += 7
     elif vol_ratio >= 1.2:       score += 5
 
-    # Sector bonus: max 10 pts (scaled from -2..+3 raw)
+    # Sector bonus: max 10 pts (scaled from raw -2..+3 to -7..+10 score points)
     sector_pts = {3: 10, 2: 7, 1: 3, 0: 0, -1: -3, -2: -7}.get(sector_bonus, 0)
-    score = max(0, score + sector_pts)
+    score = max(0, score + sector_pts)  # floor at 0, sector can't make score negative
 
-    # Fundamental score: max 10 pts
+    # Fundamental score: max 10 pts (PE, ROE, D/E composite)
     if fundamentals:
-        f_score = 4  # start at midpoint
+        f_score = 4  # start at midpoint (neutral baseline)
         pe = fundamentals.get("pe"); roe = fundamentals.get("roe"); de = fundamentals.get("de")
         mcap_ok = fundamentals.get("mcap_ok", True)
-        if pe and pe <= 30:       f_score += 3
-        elif pe and pe <= 50:     f_score += 1
-        elif pe and pe > 60:      f_score -= 2
-        if roe and roe > 20:      f_score += 3
-        elif roe and roe > 12:    f_score += 1
-        if de and de > 2.0:       f_score -= 2
-        if mcap_ok:               f_score += 1
+        if pe and pe <= 30:       f_score += 3   # reasonable valuation
+        elif pe and pe <= 50:     f_score += 1   # fair valuation
+        elif pe and pe > 60:      f_score -= 2   # expensive — caution flag
+        if roe and roe > 20:      f_score += 3   # excellent capital efficiency
+        elif roe and roe > 12:    f_score += 1   # healthy profitability
+        if de and de > 2.0:       f_score -= 2   # high leverage risk
+        if mcap_ok:               f_score += 1   # mid/large cap = more liquid
         score += max(0, min(10, f_score))
     else:
-        score += 5  # neutral when fundamentals not fetched
+        score += 5  # neutral 5pts when fundamentals not fetched (to not penalise)
 
-    # 52-week range position: max 5 pts (prefer 40–80th %ile)
+    # 52-week range position: max 5 pts (prefer stocks in 40th–80th percentile)
+    # Too low = still falling; too high = already stretched
     if 40 <= pctile_52wk <= 80:       score += 5
     elif 30 <= pctile_52wk < 40 or 80 < pctile_52wk <= 90: score += 3
     else:                              score += 1
 
-    score = min(score, 100)
+    score = min(score, 100)  # hard cap at 100
 
     min_score = int(params.get("min_score", 0) or 0)
     if score < min_score:
         return rej(f"Score {score} < min {min_score}")
 
     # ── SIGNAL CLASSIFICATION ─────────────────────────────────────
+    # STRONG BUY requires ALL of: high score, bullish MACD, price above EMA20,
+    # strong volume, positive RS, and (in BEAR/CRISIS) higher lows pattern.
+    # CRISIS regime disables STRONG BUY entirely (strong_buy_score=999).
     breadth_ok = context.get("breadth", {}).get("breadth_ok", True)
 
     if (rcfg["allow_strong_buy"]
@@ -1248,6 +1613,7 @@ def analyze_stock(sym_info, df, params, context):
     else:
         sig = "WATCH"
 
+    # Downgrade: even a STRONG BUY in a bad-breadth BEAR/CRISIS day is risky
     if sig == "STRONG BUY" and not breadth_ok and regime in (REGIME_BEAR, REGIME_CRISIS):
         sig = "BUY"
 
@@ -1335,6 +1701,18 @@ _jobs = {}; _jobs_lock = threading.Lock()
 
 
 def scan_worker(job_id, stocks, params):
+    """Background worker that runs the full screening scan for a job.
+
+    Flow:
+      1. Detect market regime (BULL/NEUTRAL/BEAR/CRISIS)
+      2. Pre-fetch shared market context once (Nifty, sectors, earnings, breadth)
+      3. Spawn ThreadPoolExecutor (up to 15 workers) to process stocks in parallel
+      4. Each worker: fetch OHLCV → analyze_stock → collect pass/reject
+      5. Results sorted by score descending, stored in _jobs[job_id]
+
+    Cancellation: checks job["cancelled"] flag before processing each stock.
+    Status progression: queued → prefetch → running → done (or cancelled)
+    """
     with _jobs_lock:
         job = _jobs.get(job_id)
     if job is None: return
@@ -1408,6 +1786,11 @@ def scan_worker(job_id, stocks, params):
 # ══════════════════════════════════════════════════════════════════════
 
 def fetch_market_data():
+    """Fetch live market overview: Nifty50, BankNifty, India VIX + breadth + regime.
+
+    Used by the /market-data route to populate the top market strip in the UI.
+    Returns price, change, change%, RSI, and direction for each index.
+    """
     if not YF_OK: return {}
     result = {}
     for name, sym in [("nifty50", "^NSEI"), ("banknifty", "^NSEBANK"), ("indiavix", "^INDIAVIX")]:
@@ -1434,13 +1817,25 @@ def fetch_market_data():
     return result
 
 def _fetch_ltp_batch(symbols):
+    """Fetch live price data for a batch of symbols using Groww API + yfinance fallback.
+
+    For each symbol, tries sources in order:
+      1. Groww API: returns last_price, day_high, day_low, day_change, change_pct
+         - HTTP 429 from Groww circuit-breaks the entire batch to yfinance
+         - Auth errors (401/403) also disable Groww for remaining symbols
+      2. yfinance: uses 5-day daily history; Close as LTP, candle H/L as day range
+
+    Returns:
+        prices: dict[symbol] = {ltp, day_high, day_low, change, change_pct, source}
+        failed: list of symbols where both sources failed
+    """
     if not symbols:
         return {}, []
     prices, failed = {}, []
     groww_available = True
     token = get_access_token()
     if not token:
-        groww_available = False
+        groww_available = False  # skip Groww entirely if no token
     for sym in symbols:
         got = False
         if groww_available:
@@ -1822,6 +2217,7 @@ def portfolio_summary():
 
 
 def _to_float(v, default=0.0):
+    """Safe float conversion with a configurable default on failure."""
     try:
         return float(v)
     except Exception:
@@ -1829,7 +2225,12 @@ def _to_float(v, default=0.0):
 
 
 def _to_naive_date(ts_str):
-    """Parse a possibly tz-aware timestamp string and return a tz-naive pd.Timestamp at midnight."""
+    """Parse a possibly tz-aware timestamp string and return a tz-naive pd.Timestamp at midnight.
+
+    Supabase returns timestamptz values with UTC timezone info. yfinance uses
+    tz-naive dates. This function normalises both to midnight UTC tz-naive so
+    comparisons and date arithmetic work correctly across both systems.
+    """
     ts = pd.Timestamp(ts_str)
     if ts.tzinfo is not None:
         ts = ts.tz_convert("UTC").tz_localize(None)
@@ -1837,7 +2238,27 @@ def _to_naive_date(ts_str):
 
 
 def run_trade_outcome_check():
-    """Reconcile open trades against historical OHLC and close hit outcomes."""
+    """Reconcile all open trades against OHLC data to detect T1/SL hits.
+
+    Two-pass strategy ensures maximum coverage:
+      Pass 1: Historical OHLC (entry_date → yesterday via yfinance)
+              Processes in parallel via ThreadPoolExecutor (10 workers)
+              If yfinance returns empty, retries without auto_adjust=True
+      Pass 2: Live intraday LTP (today's day_high/day_low via Groww + yfinance)
+              For unresolved trades, also scans last 10d row-by-row
+              (catches yesterday's hit missed by Pass 1 due to data lag)
+
+    Entry date logic:
+      - Explicit entry_date / entered_at field → use directly
+      - scanned_at only (EOD signal) → entry = scanned_at + 1 calendar day
+        (Signal generated EOD → actual trade entered next morning)
+
+    T1 priority rule: if both T1 and SL are touched on the same candle,
+    T1 wins (assumes a limit-sell order at T1 filled before the SL triggered).
+
+    Updates Supabase trades table: status, outcome_price, outcome_date, days_to_outcome.
+    Returns ({ok, checked, updated}, http_status_code).
+    """
     if not SB_OK:
         return {"ok": False, "error": "Supabase not configured"}, 503
     if not YF_OK:
@@ -2042,6 +2463,12 @@ def run_trade_outcome_check():
 
 
 def _record_portfolio_event(event_type, symbol, position_id=None, payload=None, message=None):
+    """Append an audit event to portfolio_events table.
+
+    Called after every create/update/close/delete on recommendations or positions.
+    Silently no-ops if Supabase is not configured (SB_OK=False).
+    payload_json stores a snapshot of changed fields for the history timeline.
+    """
     if not SB_OK:
         return
     try:

@@ -1,7 +1,25 @@
--- Portfolio module schema: recommendations, positions, events.
+-- =============================================================================
+-- Portfolio Module Schema
+-- Migration: 20260326_001_portfolio_module
+-- =============================================================================
+-- Creates three tables for the portfolio management module:
+--   1. recommendations  — analyst/screener buy signals tracked for reference
+--   2. portfolio_positions — actual holdings entered manually by the user
+--   3. portfolio_events    — append-only audit log for all position changes
+--
+-- These tables are separate from the 'trades' table which is managed by the
+-- Flask screener. This module allows manual portfolio tracking alongside the
+-- automated screener trade lifecycle.
+-- =============================================================================
 
-create extension if not exists "pgcrypto";
+create extension if not exists "pgcrypto"; -- enables gen_random_uuid()
 
+-- -----------------------------------------------------------------------------
+-- Table: recommendations
+-- Purpose: Store buy/strong_buy signals for tracking (manual or from screener).
+--          Separate from 'trades' — recommendations are advisory; trades are
+--          actual positions being tracked for T1/SL outcomes.
+-- -----------------------------------------------------------------------------
 create table if not exists public.recommendations (
   id uuid primary key default gen_random_uuid(),
   symbol text not null,
@@ -14,6 +32,14 @@ create table if not exists public.recommendations (
   updated_at timestamptz not null default now()
 );
 
+-- -----------------------------------------------------------------------------
+-- Table: portfolio_positions
+-- Purpose: Track actual holdings entered by the user. Unlike 'trades', these
+--          are manually entered and support fractional quantities. The
+--          current_price field is refreshed live via the /portfolio/positions
+--          route (calls _fetch_ltp_batch internally).
+--          closed_at is populated automatically when status changes to 'closed'.
+-- -----------------------------------------------------------------------------
 create table if not exists public.portfolio_positions (
   id uuid primary key default gen_random_uuid(),
   symbol text not null,
@@ -28,6 +54,13 @@ create table if not exists public.portfolio_positions (
   updated_at timestamptz not null default now()
 );
 
+-- -----------------------------------------------------------------------------
+-- Table: portfolio_events
+-- Purpose: Append-only audit log. Every create/update/close/delete on a
+--          portfolio_position writes a row here. The payload_json stores a
+--          snapshot of the changed fields. Used by the History Timeline UI.
+--          position_id FK is SET NULL on position delete so history is preserved.
+-- -----------------------------------------------------------------------------
 create table if not exists public.portfolio_events (
   id uuid primary key default gen_random_uuid(),
   position_id uuid references public.portfolio_positions(id) on delete set null,
@@ -38,6 +71,12 @@ create table if not exists public.portfolio_events (
   created_at timestamptz not null default now()
 );
 
+-- -----------------------------------------------------------------------------
+-- Indexes: optimise the common access patterns used by Flask routes
+--   - symbol: lookups by ticker (most routes filter on this)
+--   - status:  filter active vs closed records
+--   - created_at/opened_at DESC: default sort order for list endpoints
+-- -----------------------------------------------------------------------------
 create index if not exists idx_recommendations_symbol on public.recommendations(symbol);
 create index if not exists idx_recommendations_status on public.recommendations(status);
 create index if not exists idx_recommendations_created_at on public.recommendations(created_at desc);
