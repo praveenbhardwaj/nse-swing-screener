@@ -115,7 +115,7 @@ class _SBClient:
 try:
     _sb = _SBClient(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
     _probe = requests.get(
-        f"{os.environ['SUPABASE_URL'].rstrip('/')}/rest/v1/trades?select=id&limit=1",
+        f"{os.environ['SUPABASE_URL'].rstrip('/')}/rest/v1/active_trades?select=id&limit=1",
         headers={"apikey": os.environ["SUPABASE_KEY"],
                  "Authorization": f"Bearer {os.environ['SUPABASE_KEY']}"},
         timeout=8)
