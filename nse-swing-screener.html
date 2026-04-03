@@ -83,9 +83,10 @@ body{
   background:var(--white);
   padding:16px 28px;
   border-bottom:1px solid var(--border);
+  position:relative;z-index:10;
 }
 .nav-date{font-size:15px;font-weight:600;color:var(--text);letter-spacing:-.2px;white-space:nowrap}
-.top-actions{display:flex;align-items:center;gap:10px;flex-shrink:0}
+.top-actions{display:flex;align-items:center;gap:10px}
 .main-scroll{padding:24px 28px 28px;overflow-y:auto;max-height:calc(100vh - 100px)}
 .view{display:none}.view.active{display:block}
 
@@ -317,6 +318,15 @@ tbody tr{animation:fadeUp .2s ease both}
 .modal-err{font-size:11px;color:var(--red);margin-bottom:10px;min-height:16px;font-family:'JetBrains Mono',monospace}
 .modal-note{font-size:9px;color:var(--muted);margin-top:14px;line-height:1.8;font-family:'JetBrains Mono',monospace}
 
+/* ═══════════════ RECORD TRADE BTN ═══════════════ */
+.btn-record{
+  font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;
+  padding:4px 10px;border-radius:8px;border:1.5px solid var(--green-br);
+  background:var(--green-lt);color:var(--green);cursor:pointer;
+  white-space:nowrap;transition:all .2s;
+}
+.btn-record:hover{background:var(--green);color:#fff;border-color:var(--green)}
+
 /* ═══════════════ TOAST ═══════════════ */
 .toast{position:fixed;bottom:24px;right:24px;z-index:2000;font-family:'JetBrains Mono',monospace;font-size:11px;padding:12px 18px;border-radius:var(--r);box-shadow:0 8px 24px rgba(0,0,0,.2);transition:opacity .3s,transform .3s;pointer-events:none}
 .toast.hidden{opacity:0;transform:translateY(8px)}
@@ -369,40 +379,50 @@ tbody tr{animation:fadeUp .2s ease both}
   .fgrid{grid-template-columns:repeat(2,1fr)}
 }
 @media(max-width:640px){
-  .page{padding:6px}
-  .sidebar{flex-direction:column;align-items:stretch;gap:10px;padding:14px 12px;border-radius:14px 14px 0 0}
-  .side-brand{justify-content:center}
-  .side-nav{flex-direction:row;gap:4px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:2px}
-  .side-btn{white-space:nowrap;font-size:12.5px;padding:9px 12px;flex-shrink:0}
-  .main{border-radius:0 0 14px 14px}
-  .topbar{padding:10px 14px;gap:8px;flex-wrap:wrap}
-  .nav-date{font-size:13px}
-  .top-actions{gap:6px}
-  .top-actions .btn{font-size:12px;padding:7px 14px}
-  .main-scroll{padding:14px 12px 16px}
-  .mstrip{grid-template-columns:1fr 1fr;gap:10px}
-  .mc{padding:14px 14px}
-  .mc-val{font-size:18px}
-  .fconfig{padding:16px 14px}
+  .page{padding:4px}
+  .sidebar{flex-direction:column;align-items:stretch;gap:8px;padding:12px 10px;border-radius:12px 12px 0 0}
+  .side-brand{justify-content:center;padding:0 0 8px}
+  .side-nav{flex-direction:row;gap:4px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:2px;justify-content:center}
+  .side-btn{white-space:nowrap;font-size:12px;padding:8px 12px;flex-shrink:0}
+  .side-btn svg{width:16px;height:16px}
+  .main{border-radius:0 0 12px 12px}
+  .topbar{padding:10px 12px;gap:6px}
+  .nav-date{font-size:12px}
+  .top-actions{gap:6px;flex-shrink:1;flex-wrap:wrap;justify-content:flex-end}
+  .top-actions .btn{font-size:11px;padding:6px 12px}
+  .btn-topbar-outline{padding:6px 12px !important;font-size:11px !important}
+  .btn-topbar-fill{padding:6px 12px !important;font-size:11px !important}
+  .main-scroll{padding:12px 10px 16px}
+  .mstrip{grid-template-columns:1fr 1fr;gap:8px}
+  .mc{padding:12px 12px}
+  .mc-val{font-size:16px}
+  .mc-lbl{font-size:9px}
+  .fconfig{padding:14px 12px}
   .fgrid{grid-template-columns:1fr}
   .fconfig-bottom{flex-direction:column;align-items:stretch;gap:12px}
   .fconfig-bottom .run-area{width:100%}
   .fconfig-bottom .btn-p-lg{width:100%;justify-content:center}
-  .cbar{padding:10px 12px;gap:8px}
-  .tbar{padding:10px 14px}
-  table{font-size:12px}
-  th{padding:9px 10px;font-size:9px}
-  td{padding:10px 10px}
-  .disc{padding:12px 14px}
-  .proxy-banner{font-size:10px;padding:8px 12px}
-  .breadth-banner{font-size:10px;padding:8px 12px}
-  .stat-grid{grid-template-columns:1fr}
+  .cbar{padding:8px 10px;gap:6px}
+  .tbar{padding:10px 12px}
+  table{font-size:11px}
+  th{padding:8px 8px;font-size:9px}
+  td{padding:8px 8px}
+  .disc{padding:10px 12px}
+  .proxy-banner{font-size:10px;padding:8px 10px}
+  .breadth-banner{font-size:10px;padding:8px 10px}
+  .stat-grid{grid-template-columns:1fr 1fr}
+  .section-hdr{flex-direction:column;align-items:flex-start;gap:10px}
+  .section-hdr>div{flex-wrap:wrap;gap:6px;width:100%}
+  .section-hdr .btn{font-size:10px;padding:5px 10px}
+  .at-hdr{flex-direction:column;align-items:flex-start;gap:8px}
+  .period-pills{flex-wrap:wrap}
 }
 @media(max-width:380px){
   .mstrip{grid-template-columns:1fr}
   .side-brand-name{font-size:16px}
   .side-brand-mark{width:34px;height:34px;font-size:13px}
-  .top-actions .btn{padding:6px 10px;font-size:11px}
+  .top-actions .btn{padding:5px 8px;font-size:10px}
+  .stat-grid{grid-template-columns:1fr}
 }
 </style>
 </head>
@@ -421,6 +441,30 @@ tbody tr{animation:fadeUp .2s ease both}
     <button class="btn btn-p" id="credSubmitBtn" onclick="submitCredentials()" style="width:100%">Connect to Groww</button>
     <button class="btn btn-g" onclick="skipGrowwAndContinue()" style="width:100%;margin-top:8px">Use Yahoo fallback</button>
     <div class="modal-note">Credentials stored in sessionStorage only - cleared when you close the tab.</div>
+  </div>
+</div>
+
+<!-- RECORD TRADE MODAL -->
+<div class="modal-overlay" id="recordTradeModal" style="display:none">
+  <div class="modal-box">
+    <div class="modal-ttl" id="rtModalTitle">Record Trade</div>
+    <div class="modal-sub" id="rtModalSub">Enter your actual buy price and quantity.</div>
+    <input type="hidden" id="rtSymbol">
+    <input type="hidden" id="rtSignal">
+    <input type="hidden" id="rtScore">
+    <input type="hidden" id="rtName">
+    <input type="hidden" id="rtTarget">
+    <input type="hidden" id="rtSL">
+    <input type="hidden" id="rtSector">
+    <input type="hidden" id="rtBuyRangeLow">
+    <input type="hidden" id="rtBuyRangeHigh">
+    <label class="modal-lbl" for="rtBuyPrice">Buy Price</label>
+    <input class="modal-inp" type="number" id="rtBuyPrice" step="0.05" placeholder="e.g. 1248.20">
+    <label class="modal-lbl" for="rtQuantity">Quantity</label>
+    <input class="modal-inp" type="number" id="rtQuantity" step="1" min="1" placeholder="e.g. 10">
+    <div class="modal-err" id="rtErr"></div>
+    <button class="btn btn-p" id="rtSubmitBtn" onclick="submitRecordTrade()" style="width:100%">Record Trade</button>
+    <button class="btn btn-g" onclick="hideRecordTradeModal()" style="width:100%;margin-top:8px">Cancel</button>
   </div>
 </div>
 
@@ -603,12 +647,12 @@ tbody tr{animation:fadeUp .2s ease both}
 <div id="tab-active" class="view">
   <div class="section-hdr" style="margin-top:14px">
     <div class="section-ttl">Active Trades</div>
-    <div style="display:flex;gap:8px;align-items:center">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <span class="at-count" id="activeTradeCount2">0</span>
       <span class="at-live" id="activeLiveBadge"><span class="at-live-dot"></span>Live 10s</span>
       <span style="font-size:10px;color:var(--muted)" id="activeTradeUpdatedAt">Last updated -</span>
       <button class="btn btn-g" style="font-size:11px;padding:5px 10px" onclick="refreshActivePnL()">Refresh P&L</button>
-      <button class="btn btn-p" id="checkOutcomesBtn" onclick="checkOutcomes()">Check Target/SL Hit</button>
+      <button class="btn btn-p" id="checkOutcomesBtn" style="font-size:11px" onclick="checkOutcomes()">Check Target/SL Hit</button>
     </div>
   </div>
 
@@ -622,7 +666,7 @@ tbody tr{animation:fadeUp .2s ease both}
 <div id="tab-analytics" class="view">
   <div class="section-hdr" style="margin-top:14px">
     <div class="section-ttl">Trade Analytics</div>
-    <div style="display:flex;gap:8px;align-items:center">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <div class="period-pills">
         <button class="period-pill active" data-days="">All Time</button>
         <button class="period-pill" data-days="7">1W</button>
@@ -961,6 +1005,7 @@ function renderTable(data,interim){
         <th>T1 / SL</th>
         ${th("rr","R:R")}
         ${th("sector","Sector")}
+        <th>Action</th>
       </tr></thead>
       <tbody>${sorted.map((r,idx)=>`<tr style="animation-delay:${idx*.02}s">
         <td>
@@ -982,6 +1027,7 @@ function renderTable(data,interim){
         <td>${targetCell(r)}</td>
         <td>${rrCell(r)}</td>
         <td><span class="stag">${r.sector}</span></td>
+        <td>${(r.sig==="BUY"||r.sig==="STRONG BUY")?`<button class="btn-record" onclick="openRecordTrade('${r.sym}')">Record Trade</button>`:""}</td>
       </tr>`).join("")}</tbody>
     </table></div>
   </div>`;
@@ -1244,6 +1290,73 @@ function statusBadge(status){
 }
 function round2(x){return Math.round(x*100)/100;}
 function money(v){return Number(v||0).toLocaleString("en-IN",{maximumFractionDigits:2});}
+
+// ── RECORD TRADE MODAL ────────────────────────────────────────
+function openRecordTrade(sym){
+  const r=allResults.find(x=>x.sym===sym);
+  if(!r)return;
+  showRecordTradeModal({sym:r.sym,name:r.name||"",sig:r.sig,score:r.score,price:r.price,t1:r.t1,sl:r.sl,sector:r.sector,buy_range_low:r.buy_range_low,buy_range_high:r.buy_range_high});
+}
+function showRecordTradeModal(data){
+  document.getElementById("rtSymbol").value=data.sym;
+  document.getElementById("rtSignal").value=data.sig;
+  document.getElementById("rtScore").value=data.score;
+  document.getElementById("rtName").value=data.name||"";
+  document.getElementById("rtTarget").value=data.t1||0;
+  document.getElementById("rtSL").value=data.sl||0;
+  document.getElementById("rtSector").value=data.sector||"";
+  document.getElementById("rtBuyRangeLow").value=data.buy_range_low||0;
+  document.getElementById("rtBuyRangeHigh").value=data.buy_range_high||0;
+  document.getElementById("rtBuyPrice").value=data.price||"";
+  document.getElementById("rtQuantity").value="";
+  document.getElementById("rtErr").textContent="";
+  document.getElementById("rtModalTitle").textContent=`Record Trade - ${data.sym}`;
+  const rangeStr=data.buy_range_low?`Buy range: ${Number(data.buy_range_low).toLocaleString("en-IN")} - ${Number(data.buy_range_high).toLocaleString("en-IN")}`:"";
+  document.getElementById("rtModalSub").textContent=`${data.sig} signal (Score: ${data.score}). ${rangeStr}`;
+  document.getElementById("recordTradeModal").style.display="flex";
+}
+function hideRecordTradeModal(){document.getElementById("recordTradeModal").style.display="none";}
+
+async function submitRecordTrade(){
+  const sym=document.getElementById("rtSymbol").value;
+  const price=parseFloat(document.getElementById("rtBuyPrice").value);
+  const qty=parseInt(document.getElementById("rtQuantity").value);
+  const errEl=document.getElementById("rtErr");
+  if(!price||price<=0){errEl.textContent="Enter a valid buy price.";return;}
+  if(!qty||qty<=0){errEl.textContent="Enter a valid quantity.";return;}
+  const btn=document.getElementById("rtSubmitBtn");
+  btn.disabled=true;btn.textContent="Saving...";errEl.textContent="";
+  const trade={
+    sym:sym,
+    name:document.getElementById("rtName").value,
+    sig:document.getElementById("rtSignal").value,
+    score:parseInt(document.getElementById("rtScore").value),
+    price:price,
+    entry_price:price,
+    quantity:qty,
+    t1:parseFloat(document.getElementById("rtTarget").value)||null,
+    sl:parseFloat(document.getElementById("rtSL").value)||null,
+    sector:document.getElementById("rtSector").value,
+    buy_range_low:parseFloat(document.getElementById("rtBuyRangeLow").value)||null,
+    buy_range_high:parseFloat(document.getElementById("rtBuyRangeHigh").value)||null,
+    manual_record:true
+  };
+  try{
+    const r=await fetch(`${PROXY}/save-trades`,{
+      method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify([trade])
+    });
+    const d=await r.json();
+    if(d.ok){
+      hideRecordTradeModal();
+      showToast(`Trade recorded: ${sym} @ ${price} x ${qty}`,"ok");
+      await loadActiveTrades();
+    }else{
+      errEl.textContent=d.error||"Failed to save trade.";
+    }
+  }catch(e){errEl.textContent="Network error - is the backend running?";}
+  finally{btn.disabled=false;btn.textContent="Record Trade";}
+}
 
 let _toastTimer=null;
 function showToast(msg,type){
