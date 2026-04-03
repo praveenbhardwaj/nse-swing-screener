@@ -43,7 +43,7 @@ except ImportError:
 # reliably on all platforms.
 #
 # Usage mirrors the official SDK's fluent interface:
-#   _sb.table("trades").select("*").eq("status","open").order("scanned_at", desc=True).execute()
+#   _sb.table("active_trades").select("*").eq("status","open").order("added_date", desc=True).execute()
 # ══════════════════════════════════════════════════════════════════════
 
 class _SBTable:
@@ -2049,6 +2049,7 @@ def set_credentials():
 
 @app.route("/save-trades", methods=["POST"])
 def save_trades():
+    """Save BUY/STRONG BUY screener results to active_trades table."""
     if not SB_OK: return jsonify({"ok": False, "error": "Supabase not configured"}), 503
     rows = request.get_json(silent=True) or []
     if not isinstance(rows, list): return jsonify({"ok": False, "error": "expected array"}), 400
@@ -2061,156 +2062,124 @@ def save_trades():
         symbol = r.get("sym") or r.get("symbol")
         if not symbol:
             continue
-        target1 = r.get("t1")
-        target2 = r.get("t2")
-        stop_loss = r.get("sl")
-        if target1 is not None:
-            target1 = _to_float(target1, None)
-        if target2 is not None:
-            target2 = _to_float(target2, None)
-        if stop_loss is not None:
-            stop_loss = _to_float(stop_loss, None)
-        if target1 is not None and target1 <= price:
-            return jsonify({"ok": False, "error": f"Invalid target1 for {symbol}: must be greater than entry price"}), 400
-        if target2 is not None and target1 is not None and target2 < target1:
-            return jsonify({"ok": False, "error": f"Invalid target2 for {symbol}: must be greater than or equal to target1"}), 400
+        target = _to_float(r.get("t1"), None)
+        stop_loss = _to_float(r.get("sl"), None)
+        if target is not None and target <= price:
+            return jsonify({"ok": False, "error": f"Invalid target for {symbol}: must be greater than entry price"}), 400
         if stop_loss is not None and stop_loss >= price:
             return jsonify({"ok": False, "error": f"Invalid stop_loss for {symbol}: must be below entry price"}), 400
+        buy_low = r.get("buy_range_low", round(price * 0.990, 2))
+        buy_high = r.get("buy_range_high", round(price * 1.005, 2))
+        entry_range = f"{buy_low}-{buy_high}" if buy_low and buy_high else ""
         payload = {
-            "symbol":         r.get("sym") or r.get("symbol"),
-            "name":           r.get("name"),
-            "sector":         r.get("sector"),
-            "signal":         r.get("sig"),
-            "score":          r.get("score"),
-            "regime":         r.get("regime"),
-            "entry_price":    price,
-            "buy_range_low":  r.get("buy_range_low",  round(price * 0.990, 2)),
-            "buy_range_high": r.get("buy_range_high", round(price * 1.005, 2)),
-            "target1":        target1,
-            "target2":        target2,
-            "stop_loss":      stop_loss,
-            "tp_pct":         r.get("t1_pct") or r.get("tp_pct"),
-            "sl_pct":         r.get("sl_pct"),
-            "rr":             r.get("rr"),
-            "shares_20k":     r.get("shares_20k"),
-            "exp_profit_20k": r.get("exp_profit_20k"),
-            "max_loss_20k":   r.get("max_loss_20k"),
-            "status":         "open",
+            "symbol":           symbol,
+            "name":             r.get("name"),
+            "signal":           r.get("sig"),
+            "score":            r.get("score"),
+            "entry_price":      price,
+            "entry_price_range": entry_range,
+            "target":           target,
+            "stop_loss":        stop_loss,
+            "status":           "open",
         }
         try:
-            existing = (_sb.table("trades")
+            existing = (_sb.table("active_trades")
                         .select("*")
                         .eq("symbol", symbol)
                         .eq("status", "open")
-                        .order("scanned_at", desc=True)
+                        .order("added_date", desc=True)
                         .execute()).data
-            force_entry_update = bool(r.get("force_entry_update"))
             auto_sync = bool(r.get("auto_sync"))
             if existing:
-                # During autosync, preserve trader-entered entry/qty unless explicitly overridden.
-                if auto_sync and not force_entry_update:
+                if auto_sync:
                     payload["entry_price"] = existing[0].get("entry_price")
-                    payload["shares_20k"] = existing[0].get("shares_20k")
-                # If user explicitly updates entry, reset entry timestamp for outcome tracking.
-                if force_entry_update:
-                    payload["scanned_at"] = pd.Timestamp.now().isoformat()
-                _sb.table("trades").update(payload).eq("id", existing[0]["id"]).execute()
+                _sb.table("active_trades").update(payload).eq("id", existing[0]["id"]).execute()
                 updated += 1
             else:
-                # Stamp the exact entry time so holding-period OHLC checks
-                # know precisely when the trade was initiated.
-                payload["scanned_at"] = pd.Timestamp.now().isoformat()
-                _sb.table("trades").insert([payload]).execute()
+                _sb.table("active_trades").insert([payload]).execute()
                 inserted += 1
         except Exception as e:
             return jsonify({"ok": False, "error": str(e)}), 500
+    return jsonify({"ok": True, "saved": inserted + updated, "inserted": inserted, "updated": updated})
+
+
+@app.route("/active-trades")
+def get_active_trades():
+    """Return all open trades from active_trades table."""
+    if not SB_OK: return jsonify({"ok": False, "error": "Supabase not configured"}), 503
     try:
-        return jsonify({"ok": True, "saved": inserted + updated, "inserted": inserted, "updated": updated})
+        resp = _sb.table("active_trades").select("*").eq("status", "open").order("added_date", desc=True).execute()
+        return jsonify({"ok": True, "trades": resp.data or []})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
-@app.route("/trades")
-def get_trades():
+
+@app.route("/closed-trades")
+def get_closed_trades():
+    """Return closed trades with optional period filter and analytics summary."""
     if not SB_OK: return jsonify({"ok": False, "error": "Supabase not configured"}), 503
     try:
-        outcome_res, outcome_status = run_trade_outcome_check()
-        resp = _sb.table("trades").select("*").order("scanned_at", desc=True).execute()
-        if outcome_status >= 400:
-            return jsonify({"ok": True, "trades": resp.data, "outcome_reconciled": outcome_res, "outcome_reconcile_warning": True})
-        return jsonify({"ok": True, "trades": resp.data, "outcome_reconciled": outcome_res})
+        resp = _sb.table("closed_trades").select("*").order("outcome_date", desc=True).execute()
+        trades = resp.data or []
+
+        # Optional period filter
+        days = request.args.get("days")
+        if days:
+            cutoff = (pd.Timestamp.now() - pd.Timedelta(days=int(days))).date()
+            trades = [t for t in trades if t.get("added_date") and t["added_date"] >= str(cutoff)]
+
+        wins = len([t for t in trades if t.get("status") == "target_hit"])
+        losses = len([t for t in trades if t.get("status") == "sl_hit"])
+        total = len(trades)
+        win_rate = round((wins / total * 100), 1) if total else 0.0
+        total_pnl = sum(_to_float(t.get("pnl")) for t in trades)
+        avg_pnl_pct = round(sum(_to_float(t.get("pnl_pct")) for t in trades) / total, 2) if total else 0.0
+        avg_days = round(sum(_to_float(t.get("days_held")) for t in trades) / total, 1) if total else 0.0
+
+        return jsonify({
+            "ok": True,
+            "trades": trades,
+            "analytics": {
+                "total": total,
+                "wins": wins,
+                "losses": losses,
+                "win_rate": win_rate,
+                "total_pnl": round(total_pnl, 2),
+                "avg_pnl_pct": avg_pnl_pct,
+                "avg_days_held": avg_days,
+            },
+        })
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
 
 @app.route("/portfolio-summary")
 def portfolio_summary():
+    """Simple summary across both active and closed trades."""
     if not SB_OK:
         return jsonify({"ok": False, "error": "Supabase not configured"}), 503
     try:
-        resp = _sb.table("trades").select("*").order("scanned_at", desc=True).execute()
-        trades = resp.data or []
-        open_trades = [t for t in trades if t.get("status") == "open"]
-        closed_trades = [t for t in trades if t.get("status") != "open"]
+        active_resp = _sb.table("active_trades").select("*").eq("status", "open").execute()
+        closed_resp = _sb.table("closed_trades").select("*").execute()
+        active = active_resp.data or []
+        closed = closed_resp.data or []
 
-        symbols = sorted({t.get("symbol") for t in open_trades if t.get("symbol")})
-        prices, _ = _fetch_ltp_batch(symbols)
-
-        total_value = 0.0
-        total_cost = 0.0
-        holdings = []
-        sector_cost = {}
-        for t in open_trades:
-            sym = t.get("symbol")
-            qty = float(t.get("shares_20k") or 0)
-            entry = float(t.get("entry_price") or 0)
-            ltp = float((prices.get(sym, {}) or {}).get("ltp") or entry or 0)
-            position_cost = entry * qty
-            position_value = ltp * qty
-            pnl = position_value - position_cost
-            pnl_pct = (pnl / position_cost * 100) if position_cost > 0 else 0
-            total_value += position_value
-            total_cost += position_cost
-            sector = t.get("sector") or "Unknown"
-            sector_cost[sector] = sector_cost.get(sector, 0.0) + position_cost
-            holdings.append({
-                "symbol": sym,
-                "name": t.get("name"),
-                "sector": sector,
-                "qty": qty,
-                "avg_price": round(entry, 2),
-                "market_price": round(ltp, 2),
-                "position_value": round(position_value, 2),
-                "pnl": round(pnl, 2),
-                "pnl_pct": round(pnl_pct, 2),
-                "signal": t.get("signal"),
-            })
-
-        pnl_total = total_value - total_cost
-        pnl_pct_total = (pnl_total / total_cost * 100) if total_cost > 0 else 0
-        allocation = []
-        for sector, cost in sorted(sector_cost.items(), key=lambda x: x[1], reverse=True):
-            weight = (cost / total_cost * 100) if total_cost > 0 else 0
-            allocation.append({"sector": sector, "weight": round(weight, 1)})
-
-        wins = len([t for t in closed_trades if t.get("status") == "target_hit"])
-        losses = len([t for t in closed_trades if t.get("status") == "sl_hit"])
-        closed_count = len(closed_trades)
+        wins = len([t for t in closed if t.get("status") == "target_hit"])
+        losses = len([t for t in closed if t.get("status") == "sl_hit"])
+        closed_count = len(closed)
         win_rate = round((wins / closed_count * 100), 1) if closed_count else 0.0
+        total_pnl = sum(_to_float(t.get("pnl")) for t in closed)
 
         return jsonify({
             "ok": True,
             "summary": {
-                "open_positions": len(open_trades),
+                "open_positions": len(active),
                 "closed_positions": closed_count,
-                "portfolio_value": round(total_value, 2),
-                "invested_cost": round(total_cost, 2),
-                "pnl_total": round(pnl_total, 2),
-                "pnl_pct_total": round(pnl_pct_total, 2),
-                "win_rate": win_rate,
                 "wins": wins,
                 "losses": losses,
+                "win_rate": win_rate,
+                "total_pnl": round(total_pnl, 2),
             },
-            "allocation": allocation,
-            "holdings": holdings,
         })
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
@@ -2238,71 +2207,52 @@ def _to_naive_date(ts_str):
 
 
 def run_trade_outcome_check():
-    """Reconcile all open trades against OHLC data to detect T1/SL hits.
+    """Check each active trade individually for T1/SL hits over its active period.
 
-    Two-pass strategy ensures maximum coverage:
-      Pass 1: Historical OHLC (entry_date → yesterday via yfinance)
-              Processes in parallel via ThreadPoolExecutor (10 workers)
-              If yfinance returns empty, retries without auto_adjust=True
-      Pass 2: Live intraday LTP (today's day_high/day_low via Groww + yfinance)
-              For unresolved trades, also scans last 10d row-by-row
-              (catches yesterday's hit missed by Pass 1 due to data lag)
+    Two-pass strategy:
+      Pass 1: Historical OHLC (added_date → yesterday via yfinance)
+      Pass 2: Live intraday LTP (today's day_high/day_low)
 
-    Entry date logic:
-      - Explicit entry_date / entered_at field → use directly
-      - scanned_at only (EOD signal) → entry = scanned_at + 1 calendar day
-        (Signal generated EOD → actual trade entered next morning)
+    When a hit is detected:
+      - INSERT the trade into closed_trades with P&L calculated
+      - DELETE the trade from active_trades
 
-    T1 priority rule: if both T1 and SL are touched on the same candle,
-    T1 wins (assumes a limit-sell order at T1 filled before the SL triggered).
-
-    Updates Supabase trades table: status, outcome_price, outcome_date, days_to_outcome.
-    Returns ({ok, checked, updated}, http_status_code).
+    T1 priority rule: if both T1 and SL touched on the same candle, T1 wins.
+    Returns ({ok, checked, updated, details}, http_status_code).
     """
     if not SB_OK:
         return {"ok": False, "error": "Supabase not configured"}, 503
     if not YF_OK:
         return {"ok": False, "error": "yfinance not available"}, 503
     try:
-        resp = _sb.table("trades").select("*").eq("status", "open").execute()
+        resp = _sb.table("active_trades").select("*").eq("status", "open").execute()
         open_trades = [t for t in resp.data
-                       if t.get("target1") is not None and t.get("stop_loss") is not None]
+                       if t.get("target") is not None and t.get("stop_loss") is not None]
     except Exception as e:
         return {"ok": False, "error": str(e)}, 500
     if not open_trades:
-        return {"ok": True, "checked": 0, "updated": 0}, 200
+        return {"ok": True, "checked": 0, "updated": 0, "details": []}, 200
 
     updates_by_id = {}
     upd_lock = threading.Lock()
     today = pd.Timestamp.now().normalize()
 
     def check_one(trade):
-        """Historical OHLC check: entry day through yesterday (today exclusive).
-
-        entry_date / entered_at = actual purchase date → check from that day.
-        scanned_at only (EOD signal) → actual entry is next trading day, so
-        start from scanned_at + 1 calendar day to avoid false hits on the
-        scan-day candle (before the trade was entered).
-        """
+        """Historical OHLC check: added_date through yesterday."""
         try:
             sym = trade.get("symbol")
             tid = trade.get("id")
             if not sym or not tid:
                 return
-            t1 = float(trade["target1"])
+            t1 = float(trade["target"])
             sl = float(trade["stop_loss"])
+            entry = float(trade.get("entry_price") or 0)
             if t1 <= 0 or sl <= 0:
                 return
-            explicit_entry = trade.get("entry_date") or trade.get("entered_at")
-            if explicit_entry:
-                entry_day = _to_naive_date(explicit_entry)
-            else:
-                scan_ts = trade.get("scanned_at", "")
-                if not scan_ts:
-                    return
-                # EOD scan → actual holding starts the next calendar day.
-                entry_day = (_to_naive_date(scan_ts) + pd.Timedelta(days=1)).normalize()
-            # end is exclusive in yfinance – passing today gives candles up to yesterday.
+            added = trade.get("added_date")
+            if not added:
+                return
+            entry_day = pd.Timestamp(str(added)).normalize()
             if entry_day >= today:
                 return
             df = yf.Ticker(f"{sym}.NS").history(
@@ -2310,7 +2260,6 @@ def run_trade_outcome_check():
                 end=today.strftime("%Y-%m-%d"),
                 interval="1d", auto_adjust=True)
             if df is None or df.empty:
-                # Some rebranded/illiquid NSE tickers fail with auto_adjust; retry without it.
                 try:
                     df = yf.Ticker(f"{sym}.NS").history(
                         start=entry_day.strftime("%Y-%m-%d"),
@@ -2324,35 +2273,37 @@ def run_trade_outcome_check():
                 low = float(row["Low"])
                 high = float(row["High"])
                 days = max((dt.date() - entry_day.date()).days + 1, 1)
-                # Target takes precedence: if both T1 and SL were touched on
-                # the same candle, assume the limit-sell at T1 was filled first.
                 if high >= t1:
+                    pnl = round(t1 - entry, 2)
+                    pnl_pct = round((pnl / entry) * 100, 2) if entry > 0 else 0
                     with upd_lock:
-                        updates_by_id[tid] = {"id": tid, "status": "target_hit",
-                                              "outcome_price": t1,
-                                              "outcome_date": dt.date().isoformat(),
-                                              "days_to_outcome": days}
+                        updates_by_id[tid] = {
+                            "trade": trade, "status": "target_hit",
+                            "outcome_date": dt.date().isoformat(),
+                            "days_held": days, "pnl": pnl, "pnl_pct": pnl_pct,
+                        }
                     break
                 if low <= sl:
+                    pnl = round(sl - entry, 2)
+                    pnl_pct = round((pnl / entry) * 100, 2) if entry > 0 else 0
                     with upd_lock:
-                        updates_by_id[tid] = {"id": tid, "status": "sl_hit",
-                                              "outcome_price": sl,
-                                              "outcome_date": dt.date().isoformat(),
-                                              "days_to_outcome": days}
+                        updates_by_id[tid] = {
+                            "trade": trade, "status": "sl_hit",
+                            "outcome_date": dt.date().isoformat(),
+                            "days_held": days, "pnl": pnl, "pnl_pct": pnl_pct,
+                        }
                     break
         except Exception as e:
             print(f"[check_one] {trade.get('symbol','?')}: {e}")
 
-    # Pass 1: Historical OHLC (entry → yesterday).  Must run first so accurate
-    # past outcomes take priority over today's live LTP in Pass 2.
+    # Pass 1: Historical OHLC
     try:
         with ThreadPoolExecutor(max_workers=10) as ex:
             list(ex.map(check_one, open_trades))
     except Exception as e:
         return {"ok": False, "error": f"ThreadPool: {e}"}, 500
 
-    # Pass 2: Live LTP check – only for trades not resolved by historical data.
-    # Catches today's intraday SL/target hits that yfinance doesn't yet have.
+    # Pass 2: Live LTP check for trades not resolved by historical data
     remaining = [t for t in open_trades if t.get("id") not in updates_by_id]
     if remaining:
         try:
@@ -2367,53 +2318,40 @@ def run_trade_outcome_check():
                 sym = trade.get("symbol")
                 if not tid or not sym:
                     continue
-                t1 = float(trade["target1"])
+                t1 = float(trade["target"])
                 sl = float(trade["stop_loss"])
-                # Determine the first day the trade is actually in the holding
-                # period so we don't check today's range for a trade that will
-                # only be entered tomorrow (EOD-scan → next-day entry).
-                explicit_entry = trade.get("entry_date") or trade.get("entered_at")
-                if explicit_entry:
-                    actual_entry_day = _to_naive_date(explicit_entry)
-                else:
-                    scan_ts = trade.get("scanned_at", "")
-                    if not scan_ts:
-                        continue
-                    actual_entry_day = (_to_naive_date(scan_ts) + pd.Timedelta(days=1)).normalize()
+                entry = float(trade.get("entry_price") or 0)
+                added = trade.get("added_date")
+                if not added:
+                    continue
+                actual_entry_day = pd.Timestamp(str(added)).normalize()
                 if actual_entry_day > today:
-                    continue  # not entered yet; skip today's intraday check
+                    continue
                 quote = ltp_prices.get(sym) or {}
                 ltp = float(quote.get("ltp") or 0)
                 if ltp <= 0:
                     continue
-                # Use intraday high/low so a T1/SL touch during the day is
-                # caught even when the current price has since moved away.
                 day_high = float(quote.get("day_high") or ltp)
                 day_low = float(quote.get("day_low") or ltp)
-                days_to_outcome = max((today.date() - actual_entry_day.date()).days + 1, 1)
-                # Target takes precedence: if both T1 and SL touched today,
-                # assume the limit-sell at T1 was filled first.
+                days_held = max((today.date() - actual_entry_day.date()).days + 1, 1)
                 if day_high >= t1:
+                    pnl = round(t1 - entry, 2)
+                    pnl_pct = round((pnl / entry) * 100, 2) if entry > 0 else 0
                     updates_by_id[tid] = {
-                        "id": tid,
-                        "status": "target_hit",
-                        "outcome_price": t1,
+                        "trade": trade, "status": "target_hit",
                         "outcome_date": today.date().isoformat(),
-                        "days_to_outcome": days_to_outcome,
+                        "days_held": days_held, "pnl": pnl, "pnl_pct": pnl_pct,
                     }
                 elif day_low <= sl:
+                    pnl = round(sl - entry, 2)
+                    pnl_pct = round((pnl / entry) * 100, 2) if entry > 0 else 0
                     updates_by_id[tid] = {
-                        "id": tid,
-                        "status": "sl_hit",
-                        "outcome_price": sl,
+                        "trade": trade, "status": "sl_hit",
                         "outcome_date": today.date().isoformat(),
-                        "days_to_outcome": days_to_outcome,
+                        "days_held": days_held, "pnl": pnl, "pnl_pct": pnl_pct,
                     }
                 elif YF_OK:
-                    # Pass 1 missed this trade (yfinance returned empty) and today's live
-                    # high/low hasn't triggered the level yet. Scan the last 10 trading days
-                    # row-by-row so a hit from a prior session (e.g. yesterday) is caught
-                    # with the correct outcome date rather than being silently ignored.
+                    # Scan last 10 trading days for missed hits
                     try:
                         hist_recent = yf.Ticker(f"{sym}.NS").history(
                             period="10d", interval="1d", auto_adjust=True)
@@ -2429,21 +2367,21 @@ def run_trade_outcome_check():
                                 l = float(row["Low"])
                                 days_hist = max((dt_norm.date() - actual_entry_day.date()).days + 1, 1)
                                 if h >= t1:
+                                    pnl = round(t1 - entry, 2)
+                                    pnl_pct = round((pnl / entry) * 100, 2) if entry > 0 else 0
                                     updates_by_id[tid] = {
-                                        "id": tid,
-                                        "status": "target_hit",
-                                        "outcome_price": t1,
+                                        "trade": trade, "status": "target_hit",
                                         "outcome_date": dt_norm.date().isoformat(),
-                                        "days_to_outcome": days_hist,
+                                        "days_held": days_hist, "pnl": pnl, "pnl_pct": pnl_pct,
                                     }
                                     break
                                 if l <= sl:
+                                    pnl = round(sl - entry, 2)
+                                    pnl_pct = round((pnl / entry) * 100, 2) if entry > 0 else 0
                                     updates_by_id[tid] = {
-                                        "id": tid,
-                                        "status": "sl_hit",
-                                        "outcome_price": sl,
+                                        "trade": trade, "status": "sl_hit",
                                         "outcome_date": dt_norm.date().isoformat(),
-                                        "days_to_outcome": days_hist,
+                                        "days_held": days_hist, "pnl": pnl, "pnl_pct": pnl_pct,
                                     }
                                     break
                     except Exception:
@@ -2451,256 +2389,37 @@ def run_trade_outcome_check():
             except Exception:
                 continue
 
-    updates = list(updates_by_id.values())
-    for upd in updates:
-        tid = upd.pop("id")
+    # Move resolved trades: INSERT into closed_trades, DELETE from active_trades
+    details = []
+    for tid, upd in updates_by_id.items():
+        trade = upd["trade"]
+        closed_row = {
+            "added_date":       trade.get("added_date"),
+            "added_time":       trade.get("added_time"),
+            "symbol":           trade.get("symbol"),
+            "name":             trade.get("name"),
+            "signal":           trade.get("signal"),
+            "score":            trade.get("score"),
+            "entry_price":      trade.get("entry_price"),
+            "entry_price_range": trade.get("entry_price_range"),
+            "target":           trade.get("target"),
+            "stop_loss":        trade.get("stop_loss"),
+            "status":           upd["status"],
+            "pnl":              upd["pnl"],
+            "pnl_pct":          upd["pnl_pct"],
+            "outcome_date":     upd["outcome_date"],
+            "days_held":        upd["days_held"],
+        }
         try:
-            _sb.table("trades").update(upd).eq("id", tid).execute()
+            _sb.table("closed_trades").insert([closed_row]).execute()
+            _sb.table("active_trades").delete().eq("id", tid).execute()
+            details.append({"symbol": trade.get("symbol"), "status": upd["status"],
+                            "pnl": upd["pnl"], "days_held": upd["days_held"]})
         except Exception as e:
-            print(f"[outcomes] update failed: {e}")
+            print(f"[outcomes] move failed for {trade.get('symbol','?')}: {e}")
 
-    return {"ok": True, "checked": len(open_trades), "updated": len(updates)}, 200
+    return {"ok": True, "checked": len(open_trades), "updated": len(details), "details": details}, 200
 
-
-def _record_portfolio_event(event_type, symbol, position_id=None, payload=None, message=None):
-    """Append an audit event to portfolio_events table.
-
-    Called after every create/update/close/delete on recommendations or positions.
-    Silently no-ops if Supabase is not configured (SB_OK=False).
-    payload_json stores a snapshot of changed fields for the history timeline.
-    """
-    if not SB_OK:
-        return
-    try:
-        _sb.table("portfolio_events").insert([{
-            "position_id": position_id,
-            "symbol": symbol,
-            "event_type": event_type,
-            "payload_json": payload or {},
-            "message": message or "",
-        }]).execute()
-    except Exception as e:
-        print(f"[portfolio_events] {e}")
-
-
-@app.route("/portfolio/recommendations")
-def portfolio_recommendations():
-    if not SB_OK:
-        return jsonify({"ok": False, "error": "Supabase not configured"}), 503
-    try:
-        recs = _sb.table("recommendations").select("*").order("created_at", desc=True).execute().data
-        return jsonify({"ok": True, "recommendations": recs or []})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-
-@app.route("/portfolio/recommendations", methods=["POST"])
-def create_portfolio_recommendation():
-    if not SB_OK:
-        return jsonify({"ok": False, "error": "Supabase not configured"}), 503
-    data = request.get_json(silent=True) or {}
-    symbol = (data.get("symbol") or "").strip().upper()
-    rating = (data.get("rating") or "buy").strip().lower()
-    if not symbol:
-        return jsonify({"ok": False, "error": "symbol required"}), 400
-    if rating not in ("buy", "strong_buy"):
-        return jsonify({"ok": False, "error": "rating must be buy or strong_buy"}), 400
-    payload = {
-        "symbol": symbol,
-        "rating": rating,
-        "target_price": _to_float(data.get("target_price")),
-        "stop_loss": _to_float(data.get("stop_loss")),
-        "status": (data.get("status") or "active").strip().lower(),
-        "rationale": data.get("rationale"),
-        "updated_at": pd.Timestamp.now().isoformat(),
-    }
-    try:
-        inserted = _sb.table("recommendations").insert([payload]).execute().data
-        _record_portfolio_event("create", symbol, payload=payload, message="Recommendation created")
-        return jsonify({"ok": True, "recommendation": (inserted or [None])[0]})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-
-@app.route("/portfolio/recommendations/<rec_id>", methods=["PUT"])
-def update_portfolio_recommendation(rec_id):
-    if not SB_OK:
-        return jsonify({"ok": False, "error": "Supabase not configured"}), 503
-    data = request.get_json(silent=True) or {}
-    payload = {
-        "symbol": (data.get("symbol") or "").strip().upper() or None,
-        "rating": (data.get("rating") or "").strip().lower() or None,
-        "target_price": _to_float(data.get("target_price")) if data.get("target_price") is not None else None,
-        "stop_loss": _to_float(data.get("stop_loss")) if data.get("stop_loss") is not None else None,
-        "status": (data.get("status") or "").strip().lower() or None,
-        "rationale": data.get("rationale"),
-        "updated_at": pd.Timestamp.now().isoformat(),
-    }
-    payload = {k: v for k, v in payload.items() if v is not None}
-    try:
-        updated = _sb.table("recommendations").update(payload).eq("id", rec_id).execute().data
-        if not updated:
-            return jsonify({"ok": False, "error": "recommendation not found"}), 404
-        symbol = updated[0].get("symbol")
-        _record_portfolio_event("update", symbol, payload=payload, message="Recommendation updated")
-        return jsonify({"ok": True, "recommendation": updated[0]})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-
-@app.route("/portfolio/recommendations/<rec_id>", methods=["DELETE"])
-def delete_portfolio_recommendation(rec_id):
-    if not SB_OK:
-        return jsonify({"ok": False, "error": "Supabase not configured"}), 503
-    try:
-        deleted = _sb.table("recommendations").delete().eq("id", rec_id).execute().data
-        if not deleted:
-            return jsonify({"ok": False, "error": "recommendation not found"}), 404
-        symbol = deleted[0].get("symbol")
-        _record_portfolio_event("delete", symbol, payload={"id": rec_id}, message="Recommendation deleted")
-        return jsonify({"ok": True, "deleted": rec_id})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-
-@app.route("/portfolio/positions")
-def portfolio_positions():
-    if not SB_OK:
-        return jsonify({"ok": False, "error": "Supabase not configured"}), 503
-    try:
-        positions = _sb.table("portfolio_positions").select("*").order("opened_at", desc=True).execute().data or []
-        active = [p for p in positions if p.get("status") == "active" and p.get("symbol")]
-        if active:
-            symbols = sorted({p.get("symbol") for p in active})
-            prices, _ = _fetch_ltp_batch(symbols)
-            for p in positions:
-                sym = p.get("symbol")
-                if p.get("status") == "active" and sym in prices:
-                    ltp = _to_float((prices.get(sym, {}) or {}).get("ltp"), _to_float(p.get("current_price")))
-                    p["current_price"] = round(ltp, 2)
-        return jsonify({"ok": True, "positions": positions})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-
-@app.route("/portfolio/positions", methods=["POST"])
-def create_portfolio_position():
-    if not SB_OK:
-        return jsonify({"ok": False, "error": "Supabase not configured"}), 503
-    data = request.get_json(silent=True) or {}
-    symbol = (data.get("symbol") or "").strip().upper()
-    if not symbol:
-        return jsonify({"ok": False, "error": "symbol required"}), 400
-    payload = {
-        "symbol": symbol,
-        "qty": _to_float(data.get("qty")),
-        "entry_price": _to_float(data.get("entry_price")),
-        "current_price": _to_float(data.get("current_price"), _to_float(data.get("entry_price"))),
-        "status": (data.get("status") or "active").strip().lower(),
-        "notes": data.get("notes"),
-        "updated_at": pd.Timestamp.now().isoformat(),
-    }
-    try:
-        inserted = _sb.table("portfolio_positions").insert([payload]).execute().data
-        inserted_row = (inserted or [None])[0]
-        _record_portfolio_event("create", symbol, position_id=(inserted_row or {}).get("id"), payload=payload, message="Position created")
-        return jsonify({"ok": True, "position": inserted_row})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-
-@app.route("/portfolio/positions/<position_id>", methods=["PUT"])
-def update_portfolio_position(position_id):
-    if not SB_OK:
-        return jsonify({"ok": False, "error": "Supabase not configured"}), 503
-    data = request.get_json(silent=True) or {}
-    status = (data.get("status") or "").strip().lower() or None
-    payload = {
-        "symbol": (data.get("symbol") or "").strip().upper() or None,
-        "qty": _to_float(data.get("qty")) if data.get("qty") is not None else None,
-        "entry_price": _to_float(data.get("entry_price")) if data.get("entry_price") is not None else None,
-        "current_price": _to_float(data.get("current_price")) if data.get("current_price") is not None else None,
-        "status": status,
-        "notes": data.get("notes"),
-        "updated_at": pd.Timestamp.now().isoformat(),
-    }
-    if status == "closed":
-        payload["closed_at"] = pd.Timestamp.now().isoformat()
-    payload = {k: v for k, v in payload.items() if v is not None}
-    try:
-        updated = _sb.table("portfolio_positions").update(payload).eq("id", position_id).execute().data
-        if not updated:
-            return jsonify({"ok": False, "error": "position not found"}), 404
-        row = updated[0]
-        event_type = "close" if row.get("status") == "closed" else "update"
-        _record_portfolio_event(event_type, row.get("symbol"), position_id=position_id, payload=payload, message=f"Position {event_type}d")
-        return jsonify({"ok": True, "position": row})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-
-@app.route("/portfolio/positions/<position_id>", methods=["DELETE"])
-def delete_portfolio_position(position_id):
-    if not SB_OK:
-        return jsonify({"ok": False, "error": "Supabase not configured"}), 503
-    try:
-        deleted = _sb.table("portfolio_positions").delete().eq("id", position_id).execute().data
-        if not deleted:
-            return jsonify({"ok": False, "error": "position not found"}), 404
-        row = deleted[0]
-        _record_portfolio_event("delete", row.get("symbol"), position_id=position_id, payload={"id": position_id}, message="Position deleted")
-        return jsonify({"ok": True, "deleted": position_id})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-
-@app.route("/portfolio/history")
-def portfolio_history():
-    if not SB_OK:
-        return jsonify({"ok": False, "error": "Supabase not configured"}), 503
-    try:
-        events = _sb.table("portfolio_events").select("*").order("created_at", desc=True).execute().data
-        return jsonify({"ok": True, "history": events or []})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-
-@app.route("/portfolio/analytics")
-def portfolio_analytics():
-    if not SB_OK:
-        return jsonify({"ok": False, "error": "Supabase not configured"}), 503
-    try:
-        positions = _sb.table("portfolio_positions").select("*").execute().data or []
-        active = [p for p in positions if p.get("status") == "active"]
-        closed = [p for p in positions if p.get("status") == "closed"]
-
-        total_invested = sum(_to_float(p.get("qty")) * _to_float(p.get("entry_price")) for p in active)
-        current_value = sum(_to_float(p.get("qty")) * _to_float(p.get("current_price"), _to_float(p.get("entry_price"))) for p in active)
-        unrealized_pnl = current_value - total_invested
-
-        realized_values = [
-            (_to_float(p.get("qty")) * (_to_float(p.get("current_price")) - _to_float(p.get("entry_price"))))
-            for p in closed
-        ]
-        realized_pnl = sum(realized_values)
-        wins = len([v for v in realized_values if v > 0])
-        closed_count = len(closed)
-        win_rate = (wins / closed_count * 100.0) if closed_count else 0.0
-
-        return jsonify({
-            "ok": True,
-            "analytics": {
-                "active_positions": len(active),
-                "closed_positions": closed_count,
-                "total_invested": round(total_invested, 2),
-                "current_value": round(current_value, 2),
-                "unrealized_pnl": round(unrealized_pnl, 2),
-                "realized_pnl": round(realized_pnl, 2),
-                "win_rate": round(win_rate, 1),
-            },
-        })
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
 
 @app.route("/check-outcomes", methods=["POST"])
 def check_outcomes():
