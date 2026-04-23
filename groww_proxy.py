@@ -1653,6 +1653,7 @@ def analyze_stock(sym_info, df, params, context):
     why, key_risk = generate_rationale(result)
     result["why_rationale"] = why
     result["key_risk"]      = key_risk
+    result["reason"]        = f"{why} | Risk: {key_risk}"
 
     # ── STEP 10: TARGETS AND STOP LOSS ───────────────────────────
     if sig in ("STRONG BUY", "BUY"):
@@ -2081,6 +2082,7 @@ def save_trades():
             "target":           target,
             "stop_loss":        stop_loss,
             "status":           "open",
+            "reason":           r.get("reason"),
         }
         try:
             existing = (_sb.table("active_trades")
@@ -2409,6 +2411,7 @@ def run_trade_outcome_check():
             "pnl_pct":          upd["pnl_pct"],
             "outcome_date":     upd["outcome_date"],
             "days_held":        upd["days_held"],
+            "reason":           trade.get("reason"),
         }
         try:
             _sb.table("closed_trades").insert([closed_row]).execute()

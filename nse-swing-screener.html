@@ -458,6 +458,7 @@ tbody tr{animation:fadeUp .2s ease both}
     <input type="hidden" id="rtSector">
     <input type="hidden" id="rtBuyRangeLow">
     <input type="hidden" id="rtBuyRangeHigh">
+    <input type="hidden" id="rtReason">
     <label class="modal-lbl" for="rtBuyPrice">Buy Price</label>
     <input class="modal-inp" type="number" id="rtBuyPrice" step="0.05" placeholder="e.g. 1248.20">
     <label class="modal-lbl" for="rtQuantity">Quantity</label>
@@ -1187,10 +1188,11 @@ function renderActiveTradesTable(trades,prices){
       <td style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--red)">${(+(t.stop_loss||0)).toLocaleString("en-IN",{maximumFractionDigits:2})}</td>
       <td><span class="badge sb-open">Open</span></td>
       <td style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:600;${pnlCls}">${pnlStr}${pctStr}</td>
+      <td style="font-size:11px;color:var(--sub);max-width:260px;line-height:1.4">${t.reason||"<span style='color:var(--muted)'>-</span>"}</td>
     </tr>`;
   }).join("");
   el.innerHTML=`<div class="tscroll"><table>
-    <thead><tr><th>Date</th><th>Symbol</th><th>Signal</th><th>Score</th><th>Entry</th><th>Range</th><th>Target</th><th>SL</th><th>Status</th><th>Live P&L</th></tr></thead>
+    <thead><tr><th>Date</th><th>Symbol</th><th>Signal</th><th>Score</th><th>Entry</th><th>Range</th><th>Target</th><th>SL</th><th>Status</th><th>Live P&L</th><th>Reason</th></tr></thead>
     <tbody>${rows}</tbody></table></div>`;
 }
 
@@ -1290,10 +1292,11 @@ function renderClosedTradesTable(){
       <td>${statusBadge(t.status)}</td>
       <td style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:600;color:${pnlColor}">${(+(t.pnl||0)).toFixed(2)} (${(+(t.pnl_pct||0)).toFixed(2)}%)</td>
       <td style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted)">${t.days_held!=null?t.days_held+"d":"-"}</td>
+      <td style="font-size:11px;color:var(--sub);max-width:260px;line-height:1.4">${t.reason||"<span style='color:var(--muted)'>-</span>"}</td>
     </tr>`;
   }).join("");
   el.innerHTML=`<div class="tscroll"><table>
-    <thead><tr><th>Date</th><th>Symbol</th><th>Signal</th><th>Score</th><th>Entry</th><th>Target</th><th>SL</th><th>Status</th><th>P&L</th><th>Days</th></tr></thead>
+    <thead><tr><th>Date</th><th>Symbol</th><th>Signal</th><th>Score</th><th>Entry</th><th>Target</th><th>SL</th><th>Status</th><th>P&L</th><th>Days</th><th>Reason</th></tr></thead>
     <tbody>${rows}</tbody></table></div>`;
 }
 
@@ -1311,7 +1314,7 @@ function money(v){return Number(v||0).toLocaleString("en-IN",{maximumFractionDig
 function openRecordTrade(sym){
   const r=allResults.find(x=>x.sym===sym);
   if(!r)return;
-  showRecordTradeModal({sym:r.sym,name:r.name||"",sig:r.sig,score:r.score,price:r.price,t1:r.t1,sl:r.sl,sector:r.sector,buy_range_low:r.buy_range_low,buy_range_high:r.buy_range_high});
+  showRecordTradeModal({sym:r.sym,name:r.name||"",sig:r.sig,score:r.score,price:r.price,t1:r.t1,sl:r.sl,sector:r.sector,buy_range_low:r.buy_range_low,buy_range_high:r.buy_range_high,reason:r.reason||""});
 }
 function showRecordTradeModal(data){
   document.getElementById("rtSymbol").value=data.sym;
@@ -1323,6 +1326,7 @@ function showRecordTradeModal(data){
   document.getElementById("rtSector").value=data.sector||"";
   document.getElementById("rtBuyRangeLow").value=data.buy_range_low||0;
   document.getElementById("rtBuyRangeHigh").value=data.buy_range_high||0;
+  document.getElementById("rtReason").value=data.reason||"";
   document.getElementById("rtBuyPrice").value=data.price||"";
   document.getElementById("rtQuantity").value="";
   document.getElementById("rtErr").textContent="";
@@ -1355,6 +1359,7 @@ async function submitRecordTrade(){
     sector:document.getElementById("rtSector").value,
     buy_range_low:parseFloat(document.getElementById("rtBuyRangeLow").value)||null,
     buy_range_high:parseFloat(document.getElementById("rtBuyRangeHigh").value)||null,
+    reason:document.getElementById("rtReason").value||null,
     manual_record:true
   };
   try{
