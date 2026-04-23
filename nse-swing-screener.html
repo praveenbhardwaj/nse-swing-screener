@@ -1268,6 +1268,7 @@ function renderClosedTradesTable(){
       <td style="font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--muted)">${date}</td>
       <td><div class="sym-name" style="font-size:12px">${t.symbol}</div><div class="sym-sub">${t.name||""}</div></td>
       <td>${badge(t.signal||"BUY")}</td>
+      <td>${ring(t.score||0)}</td>
       <td style="font-family:'JetBrains Mono',monospace;font-size:12px">${(+(t.entry_price||0)).toLocaleString("en-IN",{maximumFractionDigits:2})}</td>
       <td style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--green)">${(+(t.target||0)).toLocaleString("en-IN",{maximumFractionDigits:2})}</td>
       <td style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--red)">${(+(t.stop_loss||0)).toLocaleString("en-IN",{maximumFractionDigits:2})}</td>
@@ -1277,7 +1278,7 @@ function renderClosedTradesTable(){
     </tr>`;
   }).join("");
   el.innerHTML=`<div class="tscroll"><table>
-    <thead><tr><th>Date</th><th>Symbol</th><th>Signal</th><th>Entry</th><th>Target</th><th>SL</th><th>Status</th><th>P&L</th><th>Days</th></tr></thead>
+    <thead><tr><th>Date</th><th>Symbol</th><th>Signal</th><th>Score</th><th>Entry</th><th>Target</th><th>SL</th><th>Status</th><th>P&L</th><th>Days</th></tr></thead>
     <tbody>${rows}</tbody></table></div>`;
 }
 
