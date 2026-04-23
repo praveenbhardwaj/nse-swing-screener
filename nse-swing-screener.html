@@ -674,6 +674,12 @@ tbody tr{animation:fadeUp .2s ease both}
         <button class="period-pill" data-days="30">1M</button>
         <button class="period-pill" data-days="90">3M</button>
       </div>
+      <div class="period-pills status-pills">
+        <button class="period-pill status-filter active" data-status="">All</button>
+        <button class="period-pill status-filter" data-status="target_hit">Target Hit</button>
+        <button class="period-pill status-filter" data-status="sl_hit">SL Hit</button>
+        <button class="period-pill status-filter" data-status="open">Open</button>
+      </div>
       <button class="btn btn-g" onclick="loadClosedTrades()">Refresh</button>
     </div>
   </div>
@@ -725,11 +731,18 @@ window.addEventListener("load",async()=>{
     if(document.hidden)stopActivePnlAutoRefresh();
     else if(document.getElementById("tab-active")?.classList.contains("active"))startActivePnlAutoRefresh();
   });
-  document.querySelectorAll(".period-pill").forEach(btn=>{
+  document.querySelectorAll(".period-pill:not(.status-filter)").forEach(btn=>{
     btn.addEventListener("click",()=>{
-      document.querySelectorAll(".period-pill").forEach(b=>b.classList.remove("active"));
+      document.querySelectorAll(".period-pill:not(.status-filter)").forEach(b=>b.classList.remove("active"));
       btn.classList.add("active");
       loadClosedTrades();
+    });
+  });
+  document.querySelectorAll(".status-filter").forEach(btn=>{
+    btn.addEventListener("click",()=>{
+      document.querySelectorAll(".status-filter").forEach(b=>b.classList.remove("active"));
+      btn.classList.add("active");
+      renderClosedTradesTable();
     });
   });
 });
@@ -1257,11 +1270,13 @@ function renderAnalyticsStats(){
 
 function renderClosedTradesTable(){
   const el=document.getElementById("closedTradesTable");
-  if(!closedTradesData.length){
-    el.innerHTML=`<div class="empty"><div class="empty-ico">-</div><div>No closed trades yet.</div></div>`;
+  const statusFilter=document.querySelector(".status-filter.active")?.dataset.status||"";
+  const filtered=statusFilter?closedTradesData.filter(t=>t.status===statusFilter):closedTradesData;
+  if(!filtered.length){
+    el.innerHTML=`<div class="empty"><div class="empty-ico">-</div><div>${closedTradesData.length?"No trades match this filter.":"No closed trades yet."}</div></div>`;
     return;
   }
-  const rows=closedTradesData.map(t=>{
+  const rows=filtered.map(t=>{
     const pnlColor=(+(t.pnl||0))>=0?"var(--green)":"var(--red)";
     const date=t.added_date||"-";
     return`<tr>
