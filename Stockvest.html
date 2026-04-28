@@ -1,0 +1,1138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stockvest — Precision Curator</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: oklch(0.975 0.006 80);
+    --bg2: oklch(0.965 0.008 80);
+    --surface: rgba(255,255,255,0.88);
+    --surface-solid: #ffffff;
+    --border: rgba(0,0,0,0.07);
+    --border-strong: rgba(0,0,0,0.12);
+    --navy: oklch(0.25 0.10 265);
+    --navy-mid: oklch(0.38 0.10 265);
+    --navy-soft: oklch(0.55 0.07 265);
+    --green: oklch(0.52 0.16 145);
+    --green-bg: oklch(0.96 0.05 145);
+    --green-border: oklch(0.88 0.08 145);
+    --red: oklch(0.52 0.18 22);
+    --red-bg: oklch(0.97 0.05 22);
+    --red-border: oklch(0.90 0.08 22);
+    --gold: oklch(0.68 0.13 75);
+    --gold-bg: oklch(0.97 0.04 75);
+    --text-primary: oklch(0.18 0.04 265);
+    --text-secondary: oklch(0.48 0.04 265);
+    --text-tertiary: oklch(0.68 0.03 265);
+    --shadow-sm: 0 1px 3px rgba(0,0,0,0.05), 0 1px 8px rgba(0,0,0,0.03);
+    --shadow-md: 0 2px 8px rgba(0,0,0,0.06), 0 8px 24px rgba(0,0,0,0.04);
+    --shadow-lg: 0 4px 16px rgba(0,0,0,0.08), 0 16px 48px rgba(0,0,0,0.06);
+    --radius: 12px;
+    --radius-sm: 8px;
+    --radius-xs: 5px;
+  }
+
+  html, body, #root {
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+  }
+
+  body {
+    font-family: 'Space Grotesk', sans-serif;
+    background: var(--bg);
+    color: var(--text-primary);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  canvas#bg {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+  }
+
+  #root { position: relative; z-index: 1; }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.12); border-radius: 99px; }
+
+  /* Table base */
+  table { border-collapse: collapse; width: 100%; }
+  th { font-family: 'Space Grotesk', sans-serif; font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-tertiary); padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: white; z-index: 2; }
+  td { font-family: 'DM Mono', monospace; font-size: 12px; color: var(--text-primary); padding: 14px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  tr:hover td { background: oklch(0.97 0.006 265 / 0.4); }
+  tr:last-child td { border-bottom: none; }
+
+  /* Buttons */
+  .btn-primary {
+    background: var(--navy);
+    color: white;
+    border: none;
+    padding: 8px 18px;
+    border-radius: var(--radius-sm);
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    letter-spacing: 0.01em;
+    transition: all 0.15s;
+  }
+  .btn-primary:hover { background: var(--navy-mid); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(30,27,75,0.25); }
+
+  .btn-ghost {
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-strong);
+    padding: 7px 14px;
+    border-radius: var(--radius-sm);
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .btn-ghost:hover { background: white; color: var(--text-primary); border-color: var(--navy-soft); }
+
+  .btn-sm {
+    padding: 5px 12px;
+    font-size: 11px;
+    border-radius: 6px;
+  }
+
+  /* Pill / badge */
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 10px;
+    border-radius: 99px;
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+
+  /* Score circle */
+  .score-ring {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    font-weight: 500;
+    position: relative;
+    flex-shrink: 0;
+  }
+
+  /* Select */
+  select {
+    appearance: none;
+    background: white;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    padding: 8px 32px 8px 12px;
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 13px;
+    color: var(--text-primary);
+    cursor: pointer;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23666' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  select:focus { border-color: var(--navy-soft); }
+
+  /* Range slider */
+  input[type=range] {
+    -webkit-appearance: none;
+    height: 3px;
+    background: linear-gradient(to right, var(--navy) var(--pct, 70%), var(--border-strong) var(--pct, 70%));
+    border-radius: 99px;
+    outline: none;
+    cursor: pointer;
+    width: 100%;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 16px;
+    height: 16px;
+    background: var(--navy);
+    border-radius: 50%;
+    border: 2px solid white;
+    box-shadow: 0 2px 6px rgba(30,27,75,0.3);
+    cursor: pointer;
+  }
+
+  /* Stat card */
+  .stat-card {
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px 22px;
+    box-shadow: var(--shadow-sm);
+    flex: 1;
+    min-width: 0;
+  }
+
+  /* Section title */
+  .section-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: -0.02em;
+  }
+
+  /* Tab group */
+  .tab-group {
+    display: flex;
+    gap: 2px;
+    background: oklch(0.93 0.01 265);
+    padding: 3px;
+    border-radius: var(--radius-sm);
+  }
+  .tab {
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.15s;
+    border: none;
+    background: transparent;
+    font-family: 'Space Grotesk', sans-serif;
+    white-space: nowrap;
+  }
+  .tab.active { background: white; color: var(--text-primary); font-weight: 600; box-shadow: var(--shadow-sm); }
+  .tab:hover:not(.active) { color: var(--text-primary); }
+
+  /* Animate in */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .fade-up { animation: fadeUp 0.35s ease forwards; }
+
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+</style>
+</head>
+<body>
+<canvas id="bg"></canvas>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+/* ─── Animated background ─── */
+function AnimatedBackground() {
+  const canvasRef = useRef(null);
+  const mouse = useRef({ x: -9999, y: -9999 });
+  const animRef = useRef(null);
+
+  useEffect(() => {
+    const canvas = document.getElementById('bg');
+    const ctx = canvas.getContext('2d');
+    let W, H, nodes = [];
+
+    function resize() {
+      W = canvas.width = window.innerWidth;
+      H = canvas.height = window.innerHeight;
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    function rand(a, b) { return a + Math.random() * (b - a); }
+
+    function makeNodes(n) {
+      nodes = [];
+      for (let i = 0; i < n; i++) {
+        nodes.push({
+          x: rand(0, W), y: rand(0, H),
+          vx: rand(-0.18, 0.18), vy: rand(-0.12, 0.12),
+          r: rand(1.5, 3.5),
+          phase: rand(0, Math.PI * 2)
+        });
+      }
+    }
+    makeNodes(70);
+
+    window.addEventListener('mousemove', e => {
+      mouse.current = { x: e.clientX, y: e.clientY };
+    });
+
+    let t = 0;
+    function draw() {
+      t += 0.008;
+      ctx.clearRect(0, 0, W, H);
+
+      // Soft gradient overlay
+      const grd = ctx.createRadialGradient(W*0.3, H*0.2, 0, W*0.3, H*0.2, W*0.7);
+      grd.addColorStop(0, 'rgba(200,210,255,0.12)');
+      grd.addColorStop(1, 'rgba(255,248,240,0)');
+      ctx.fillStyle = grd;
+      ctx.fillRect(0, 0, W, H);
+
+      const grd2 = ctx.createRadialGradient(W*0.8, H*0.8, 0, W*0.8, H*0.8, W*0.5);
+      grd2.addColorStop(0, 'rgba(255,220,180,0.08)');
+      grd2.addColorStop(1, 'rgba(255,248,240,0)');
+      ctx.fillStyle = grd2;
+      ctx.fillRect(0, 0, W, H);
+
+      // Update + draw nodes
+      nodes.forEach(n => {
+        // mouse repel
+        const dx = n.x - mouse.current.x;
+        const dy = n.y - mouse.current.y;
+        const d = Math.sqrt(dx*dx + dy*dy);
+        if (d < 120) {
+          const f = (120 - d) / 120 * 0.3;
+          n.vx += (dx/d) * f;
+          n.vy += (dy/d) * f;
+        }
+        // dampen
+        n.vx *= 0.99;
+        n.vy *= 0.99;
+        n.x += n.vx;
+        n.y += n.vy;
+        // wrap
+        if (n.x < -20) n.x = W + 20;
+        if (n.x > W + 20) n.x = -20;
+        if (n.y < -20) n.y = H + 20;
+        if (n.y > H + 20) n.y = -20;
+
+        const pulse = Math.sin(t + n.phase) * 0.3 + 0.7;
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, n.r * pulse, 0, Math.PI*2);
+        ctx.fillStyle = `rgba(100,110,180,${0.12 * pulse})`;
+        ctx.fill();
+      });
+
+      // Draw edges
+      for (let i = 0; i < nodes.length; i++) {
+        for (let j = i+1; j < nodes.length; j++) {
+          const a = nodes[i], b = nodes[j];
+          const dx = a.x - b.x, dy = a.y - b.y;
+          const d = Math.sqrt(dx*dx + dy*dy);
+          if (d < 130) {
+            const alpha = (1 - d/130) * 0.12;
+            ctx.beginPath();
+            ctx.moveTo(a.x, a.y);
+            ctx.lineTo(b.x, b.y);
+            ctx.strokeStyle = `rgba(90,100,180,${alpha})`;
+            ctx.lineWidth = 0.7;
+            ctx.stroke();
+          }
+        }
+      }
+
+      // Subtle grid
+      ctx.strokeStyle = 'rgba(100,110,160,0.035)';
+      ctx.lineWidth = 1;
+      const gridSize = 60;
+      for (let x = 0; x < W; x += gridSize) {
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+      }
+      for (let y = 0; y < H; y += gridSize) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+      }
+
+      animRef.current = requestAnimationFrame(draw);
+    }
+    draw();
+
+    return () => {
+      cancelAnimationFrame(animRef.current);
+      window.removeEventListener('resize', resize);
+    };
+  }, []);
+
+  return null;
+}
+
+/* ─── Data ─── */
+const ACTIVE_TRADES = [
+  { date: '2026-04-28', symbol: 'INDUSINDBK', name: 'IndusInd Bank Ltd.', signal: 'BUY', score: 72, entry: 889.45, range: '871.44–878.34', target: 929.25, sl: 854.02, status: 'Open', pnl: -3.99, pnlPct: -0.44, reason: 'Outperforming Nifty by +5.8% (5d) — Institutional accumulation | MACD bullish — positive momentum confirmed | Price above 200 EMA — long-term uptrend intact | Risk: Market reversal could invalidate setup — honour stop loss strictly' },
+  { date: '2026-04-28', symbol: 'SUNPHARMA', name: 'Sun Pharmaceutical Industries Ltd.', signal: 'STRONG BUY', score: 82, entry: 1755.2, range: '1708.11–1732.79', target: 1833.75, sl: 1694.99, status: 'Open', pnl: -7.98, pnlPct: -0.45, reason: 'Outperforming Nifty by +7.0% (5d) — Institutional accumulation | MACD bullish — positive momentum confirmed | Price above 200 EMA — long-term uptrend intact | Risk: Near SL zone, high limited upside; watch for reversal' },
+  { date: '2026-04-28', symbol: 'SHYAMMETL', name: 'Shyam Metalics and Energy Ltd.', signal: 'BUY', score: 68, entry: 890.6, range: '877.99–885.01', target: 930.46, sl: 855.13, status: 'Open', pnl: -12.83, pnlPct: -1.44, reason: 'Outperforming Nifty +10.2% (5d) — Institutional accumulation | MACD bullish — positive momentum confirmed | Price = EMA20 / EMA50 short; aims to hit alignment | Risk: Market reversal could invalidate setup — honour stop loss strictly' },
+  { date: '2026-04-28', symbol: 'CHENNPETRO', name: 'Chennai Petroleum Corporation Ltd.', signal: 'BUY', score: 71, entry: 1062, range: '1049.78–1057.62', target: 1189.57, sl: 1019.71, status: 'Open', pnl: 18.38, pnlPct: 1.73, reason: 'Outperforming Nifty by +8.0% (5d) — Institutional accumulation | MACD bullish — positive momentum confirmed | Price = EMA20 / EMA50 short; aims to hit alignment | Risk: Near SL zone, high R:R 1-may be needed' },
+  { date: '2026-04-27', symbol: 'RELIANCE', name: 'Reliance Industries Ltd.', signal: 'BUY', score: 79, entry: 2920.5, range: '2890–2905', target: 3050.0, sl: 2840.0, status: 'Open', pnl: 42.10, pnlPct: 1.44, reason: 'Strong institutional accumulation. RSI bullish divergence forming. Price reclaiming 200EMA. Risk: global macro headwinds.' },
+  { date: '2026-04-26', symbol: 'HDFCBANK', name: 'HDFC Bank Ltd.', signal: 'STRONG BUY', score: 88, entry: 1680.0, range: '1655–1668', target: 1780.0, sl: 1620.0, status: 'Open', pnl: 28.60, pnlPct: 1.70, reason: 'Credit growth acceleration. FII inflows strong. MACD bullish crossover on daily. Risk: NPA concerns could cap upside.' },
+];
+
+const ANALYTICS_TRADES = [
+  { date: '2026-04-21', symbol: 'LALPATHLAB', name: 'Dr. Lal PathLabs Ltd.', signal: 'BUY', score: 73, entry: 1454.5, target: 1519.59, sl: 1396.58, status: 'SL Hit', pnl: -57.92, pnlPct: -3.98, days: 1 },
+  { date: '2026-04-05', symbol: 'SARDAEN', name: 'Sarda Energy & Minerals Ltd.', signal: 'BUY', score: 77, entry: 582.15, target: 688.7, sl: 558.97, status: 'Target Hit', pnl: 26.05, pnlPct: 4.47, days: 15 },
+  { date: '2026-04-22', symbol: 'RRKABEL', name: 'RR Kabel Ltd.', signal: 'BUY', score: 74, entry: 1580, target: 1569.21, sl: 1442.18, status: 'SL Hit', pnl: -59.82, pnlPct: -3.78, days: 4 },
+  { date: '2026-04-21', symbol: 'DRREDDY', name: 'Dr. Reddy\'s Laboratories Ltd.', signal: 'STRONG BUY', score: 81, entry: 1302, target: 1360.26, sl: 1200.15, status: 'SL Hit', pnl: -51.85, pnlPct: -3.98, days: 1 },
+  { date: '2026-04-23', symbol: 'GSPL', name: 'Gujarat State Petronet Ltd.', signal: 'BUY', score: 69, entry: 271.75, target: 303.41, sl: 268.99, status: 'Target Hit', pnl: 12.36, pnlPct: 4.47, days: 4 },
+  { date: '2026-04-24', symbol: 'MMTC', name: 'MMTC Ltd.', signal: 'BUY', score: 66, entry: 56.73, target: 69.72, sl: 54.88, status: 'Target Hit', pnl: 2.91, pnlPct: 5.13, days: 3 },
+  { date: '2026-04-10', symbol: 'LGBINDIA', name: 'LGB Industries Ltd.', signal: 'BUY', score: 70, entry: 380, target: 410.0, sl: 358.0, status: 'Open', pnl: 69.43, pnlPct: 18.27, days: 18 },
+  { date: '2026-04-15', symbol: 'TATAPOWER', name: 'Tata Power Co. Ltd.', signal: 'BUY', score: 76, entry: 392.5, target: 430.0, sl: 372.0, status: 'Target Hit', pnl: 18.75, pnlPct: 4.78, days: 8 },
+];
+
+const SCREENER_RESULTS = [
+  { symbol: 'SUNPHARMA', name: 'Sun Pharmaceutical Industries Ltd.', score: 82, signal: 'STRONG BUY', price: 1755.2, buyRange: '1730–1755', rsi: 56.9, vol: 6.4, ema: '+', macd: '+', vsNifty: '+7.5%', t1: 1833.75, sl: 1694.99, rr: '2:1.69', sector: 'Healthcare' },
+  { symbol: 'SHYAMMETL', name: 'Shyam Metalics and Energy Ltd.', score: 68, signal: 'BUY', price: 890.6, buyRange: '877–890', rsi: 56.8, vol: 7.0, ema: '+', macd: '+', vsNifty: '+10.2%', t1: 930.46, sl: 855.13, rr: '1:1.43', sector: 'Capital Goods' },
+  { symbol: 'RELIANCE', name: 'Reliance Industries Ltd.', score: 79, signal: 'BUY', price: 2920.5, buyRange: '2890–2920', rsi: 62.1, vol: 8.3, ema: '+', macd: '+', vsNifty: '+5.1%', t1: 3050.0, sl: 2840.0, rr: '2:1.55', sector: 'Energy' },
+  { symbol: 'HDFCBANK', name: 'HDFC Bank Ltd.', score: 88, signal: 'STRONG BUY', price: 1680.0, buyRange: '1655–1680', rsi: 61.4, vol: 12.5, ema: '+', macd: '+', vsNifty: '+8.3%', t1: 1780.0, sl: 1620.0, rr: '2:1.67', sector: 'Banking' },
+  { symbol: 'TATAPOWER', name: 'Tata Power Co. Ltd.', score: 74, signal: 'BUY', price: 392.5, buyRange: '385–392', rsi: 58.2, vol: 9.1, ema: '+', macd: '+', vsNifty: '+6.4%', t1: 430.0, sl: 372.0, rr: '2:1.81', sector: 'Power' },
+];
+
+const TRADING_RULES = [
+  { id: 1, category: 'Entry', icon: '▲', title: 'Wait for the Signal', body: 'Never enter a trade before the screener emits a BUY or STRONG BUY signal. Anticipating moves is speculation, not strategy. Patience is the edge.' },
+  { id: 2, category: 'Entry', icon: '▲', title: 'Buy Within the Range', body: 'Execute entries strictly within the published buy range. Chasing breakouts above the range destroys your risk-reward ratio before the trade even begins.' },
+  { id: 3, category: 'Entry', icon: '▲', title: 'Minimum Score 70', body: 'Only trade stocks with a composite score of 70 or above. Below this threshold, conviction is insufficient to justify capital deployment.' },
+  { id: 4, category: 'Risk', icon: '⬡', title: 'Honour the Stop Loss — Always', body: 'The stop loss is sacred. No manual overrides, no averaging down, no hoping. The moment price closes below SL, exit the position. Protecting capital is rule one.' },
+  { id: 5, category: 'Risk', icon: '⬡', title: 'Risk 1–2% Per Trade', body: 'Size each position so that a full SL hit costs no more than 1–2% of total capital. Consistent sizing is what separates professionals from gamblers.' },
+  { id: 6, category: 'Risk', icon: '⬡', title: 'Maximum 6 Concurrent Positions', body: 'Concentration beyond 6 open trades dilutes attention and inflates correlated risk. When the 6 slots are full, wait for exits before adding new positions.' },
+  { id: 7, category: 'Exit', icon: '●', title: 'Target 1 is the Priority Exit', body: 'Book at least 60% of the position at Target 1. Letting winners run beyond T1 without partial booking is how profits evaporate. Lock in gains systematically.' },
+  { id: 8, category: 'Exit', icon: '●', title: 'Trail the Stop After T1', body: 'Once T1 is hit, move the stop to breakeven on the remaining position. This converts the trade to a free ride. Never give back a winner.' },
+  { id: 9, category: 'Exit', icon: '●', title: 'Exit on Deteriorating Signal', body: 'If the stock\'s score drops below 60 or the MACD turns bearish while still in the trade, exit even if price hasn\'t hit SL. Signals degrade before prices do.' },
+  { id: 10, category: 'Mindset', icon: '◆', title: 'No Revenge Trading', body: 'A SL hit is not a loss — it is the system working correctly. Never re-enter the same stock immediately after a stop out. Reactive trading destroys accounts.' },
+  { id: 11, category: 'Mindset', icon: '◆', title: 'Trust the System, Not the News', body: 'Ignore analyst recommendations, social media tips, and breaking news. The screener factors fundamentals systematically. Anecdotal news introduces bias.' },
+  { id: 12, category: 'Mindset', icon: '◆', title: 'Review Weekly, Not Daily', body: 'Daily P&L obsession leads to over-trading. Review performance weekly. Assess the process — not just the outcome. A losing trade can be a perfect execution.' },
+];
+
+/* ─── Components ─── */
+function ScoreRing({ score }) {
+  const pct = score / 100;
+  const strong = score >= 80;
+  const color = strong ? 'var(--navy)' : 'var(--navy-soft)';
+  const circumference = 2 * Math.PI * 15;
+  const dash = pct * circumference;
+
+  return (
+    <div style={{ width: 36, height: 36, position: 'relative', flexShrink: 0 }}>
+      <svg width="36" height="36" style={{ transform: 'rotate(-90deg)' }}>
+        <circle cx="18" cy="18" r="15" fill="none" stroke="oklch(0.92 0.03 265)" strokeWidth="2.5" />
+        <circle cx="18" cy="18" r="15" fill="none" stroke={color} strokeWidth="2.5"
+          strokeDasharray={`${dash} ${circumference}`} strokeLinecap="round" />
+      </svg>
+      <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: "'DM Mono'", fontSize: 10, fontWeight: 500, color }}>
+        {score}
+      </div>
+    </div>
+  );
+}
+
+function SignalBadge({ signal }) {
+  const strong = signal === 'STRONG BUY';
+  return (
+    <span className="pill" style={{
+      background: strong ? 'var(--navy)' : 'var(--green-bg)',
+      color: strong ? 'white' : 'var(--green)',
+      border: strong ? 'none' : '1px solid var(--green-border)',
+      fontSize: 10,
+    }}>
+      {signal}
+    </span>
+  );
+}
+
+function StatusBadge({ status }) {
+  const cfg = {
+    'Open': { bg: 'oklch(0.96 0.04 265)', color: 'var(--navy-mid)', border: 'oklch(0.88 0.06 265)' },
+    'Target Hit': { bg: 'var(--green-bg)', color: 'var(--green)', border: 'var(--green-border)' },
+    'SL Hit': { bg: 'var(--red-bg)', color: 'var(--red)', border: 'var(--red-border)' },
+  };
+  const s = cfg[status] || cfg['Open'];
+  return (
+    <span className="pill" style={{ background: s.bg, color: s.color, border: `1px solid ${s.border}`, fontSize: 10 }}>
+      {status}
+    </span>
+  );
+}
+
+function PnLCell({ pnl, pnlPct }) {
+  const pos = pnl >= 0;
+  return (
+    <div style={{ fontFamily: "'DM Mono'", fontSize: 12 }}>
+      <div style={{ color: pos ? 'var(--green)' : 'var(--red)', fontWeight: 500 }}>
+        {pos ? '+' : ''}{pnl.toFixed(2)}
+      </div>
+      <div style={{ color: pos ? 'var(--green)' : 'var(--red)', fontSize: 10, opacity: 0.8 }}>
+        ({pos ? '+' : ''}{pnlPct.toFixed(2)}%)
+      </div>
+    </div>
+  );
+}
+
+/* ─── Pages ─── */
+function ScreenerPage() {
+  const [minScore, setMinScore] = useState(70);
+  const [universe, setUniverse] = useState('Nifty 500');
+  const [rsi, setRsi] = useState('RSI Range: 30–70');
+  const [vol, setVol] = useState('Volume Min 1M × min');
+  const [ema, setEma] = useState('EMA 20: At or Above');
+  const [macd, setMacd] = useState('MACD: Bullish / Neutral');
+
+  const filtered = SCREENER_RESULTS.filter(r => r.score >= minScore);
+
+  return (
+    <div className="fade-up" style={{ padding: '24px 28px', height: '100%', display: 'flex', flexDirection: 'column', gap: 20, overflowY: 'auto' }}>
+      {/* Market overview */}
+      <div style={{ display: 'flex', gap: 14 }}>
+        {[
+          { label: 'NIFTY 50', value: '24,080.7', sub: '+0.76% · RSI 54', pos: true },
+          { label: 'INDIA VIX', value: '18.77', sub: 'Elevated', pos: false },
+          { label: 'UNIVERSE', value: '500', sub: 'Nifty 500 stocks', pos: null },
+          { label: 'LAST SCAN', value: '10', sub: '11:39 am', pos: null },
+        ].map(c => (
+          <div key={c.label} className="stat-card">
+            <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', color: 'var(--text-tertiary)', marginBottom: 8, textTransform: 'uppercase' }}>{c.label}</div>
+            <div style={{ fontSize: 22, fontWeight: 700, fontFamily: "'DM Mono'", color: c.pos === null ? 'var(--text-primary)' : c.pos ? 'var(--green)' : 'var(--red)', letterSpacing: '-0.02em' }}>{c.value}</div>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 4 }}>{c.sub}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Filters */}
+      <div style={{ background: 'white', borderRadius: 'var(--radius)', border: '1px solid var(--border)', padding: '20px 22px', boxShadow: 'var(--shadow-sm)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <div style={{ fontWeight: 600, fontSize: 14 }}>Scan Filters</div>
+          <button className="btn-ghost btn-sm" style={{ color: 'var(--navy)', borderColor: 'var(--navy)', fontSize: 11 }}>Reset defaults</button>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginBottom: 10 }}>
+          <select value={universe} onChange={e => setUniverse(e.target.value)}>
+            <option>Nifty 500</option><option>Nifty 200</option><option>Nifty 50</option>
+          </select>
+          <select value={rsi} onChange={e => setRsi(e.target.value)}>
+            <option>RSI Range: 30–70</option><option>RSI Range: 40–60</option><option>RSI Range: 50–80</option>
+          </select>
+          <select value={vol} onChange={e => setVol(e.target.value)}>
+            <option>Volume Min 1M × min</option><option>Volume Min 5M × min</option>
+          </select>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 18 }}>
+          <select value={ema} onChange={e => setEma(e.target.value)}>
+            <option>EMA 20: At or Above</option><option>EMA 50: At or Above</option><option>EMA 200: At or Above</option>
+          </select>
+          <select value={macd} onChange={e => setMacd(e.target.value)}>
+            <option>MACD: Bullish / Neutral</option><option>MACD: Bullish only</option>
+          </select>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)', flexShrink: 0 }}>Minimum Score</div>
+          <div style={{ flex: 1 }}>
+            <input type="range" min="50" max="95" value={minScore}
+              onChange={e => setMinScore(Number(e.target.value))}
+              style={{ '--pct': `${(minScore - 50) / 45 * 100}%` }} />
+          </div>
+          <div style={{ fontFamily: "'DM Mono'", fontWeight: 600, fontSize: 15, color: 'var(--navy)', minWidth: 28, textAlign: 'right' }}>{minScore}</div>
+          <button className="btn-primary" style={{ marginLeft: 8 }}>Run Screener</button>
+        </div>
+      </div>
+
+      {/* Alert bar */}
+      <div style={{ background: 'oklch(0.97 0.03 75)', border: '1px solid oklch(0.90 0.06 75)', borderRadius: 'var(--radius-sm)', padding: '10px 16px', fontSize: 12, color: 'var(--gold)', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontSize: 14 }}>⚡</span>
+        1 Breadth scan — 3/0, 0.7% — STRONG BUY signals downgraded to BUY
+      </div>
+
+      {/* Results */}
+      <div style={{ background: 'white', borderRadius: 'var(--radius)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-sm)', overflow: 'hidden', flex: 1 }}>
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>
+            <span style={{ color: 'var(--navy)', fontFamily: "'DM Mono'", fontSize: 16 }}>{filtered.length}</span>
+            <span style={{ color: 'var(--text-secondary)', marginLeft: 6 }}>passed all filters</span>
+          </div>
+          <div style={{ display: 'flex', gap: 16, fontSize: 11 }}>
+            {[['var(--navy)', 'Strong Buy (1)'], ['var(--green)', 'Buy (3)'], ['var(--gold)', 'Watch (0)']].map(([c, l]) => (
+              <span key={l} style={{ display: 'flex', alignItems: 'center', gap: 5, color: 'var(--text-secondary)' }}>
+                <span style={{ width: 7, height: 7, borderRadius: '50%', background: c, display: 'inline-block' }}></span>{l}
+              </span>
+            ))}
+          </div>
+        </div>
+        <div style={{ overflowX: 'auto' }}>
+          <table>
+            <thead>
+              <tr>
+                <th>Symbol</th><th>Score</th><th>Signal</th><th>Price / Buy Range</th>
+                <th>RSI</th><th>Vol%</th><th>EMA</th><th>MACD</th>
+                <th>vs Nifty</th><th>T1 / SL</th><th>R:R</th><th>Sector</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map(r => (
+                <tr key={r.symbol}>
+                  <td>
+                    <div style={{ fontWeight: 600, fontSize: 13, fontFamily: 'Space Grotesk', color: 'var(--navy)' }}>{r.symbol}</div>
+                    <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginTop: 2, fontFamily: 'Space Grotesk' }}>{r.name}</div>
+                  </td>
+                  <td><ScoreRing score={r.score} /></td>
+                  <td><SignalBadge signal={r.signal} /></td>
+                  <td>
+                    <div style={{ fontWeight: 500 }}>{r.price.toLocaleString('en-IN')}</div>
+                    <div style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>{r.buyRange}</div>
+                  </td>
+                  <td>{r.rsi}</td>
+                  <td style={{ color: r.vol > 8 ? 'var(--green)' : 'inherit' }}>{r.vol}x</td>
+                  <td><span style={{ color: 'var(--green)', fontWeight: 600 }}>EMA+</span></td>
+                  <td><span style={{ color: 'var(--green)', fontWeight: 600 }}>MACD+</span></td>
+                  <td style={{ color: 'var(--green)', fontWeight: 500 }}>{r.vsNifty}</td>
+                  <td>
+                    <div style={{ fontSize: 11, color: 'var(--green)' }}>T: {r.t1.toLocaleString('en-IN')}</div>
+                    <div style={{ fontSize: 11, color: 'var(--red)' }}>SL: {r.sl.toLocaleString('en-IN')}</div>
+                  </td>
+                  <td style={{ color: 'var(--navy)', fontWeight: 600 }}>{r.rr}</td>
+                  <td style={{ color: 'var(--text-secondary)' }}>{r.sector}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TradeCard({ t }) {
+  const pos = t.pnl >= 0;
+  const [expanded, setExpanded] = useState(false);
+
+  // Progress: how far price has moved from entry toward target
+  const progress = Math.max(0, Math.min(100,
+    pos
+      ? ((t.pnl) / (t.target - t.entry)) * 100
+      : ((t.entry - t.sl) > 0 ? (Math.abs(t.pnl) / (t.entry - t.sl)) * 100 : 0)
+  ));
+
+  const accentColor = pos ? 'var(--green)' : 'var(--red)';
+  const accentBg = pos ? 'var(--green-bg)' : 'var(--red-bg)';
+  const accentBorder = pos ? 'var(--green-border)' : 'var(--red-border)';
+  const accentLight = pos ? 'oklch(0.94 0.06 145 / 0.35)' : 'oklch(0.94 0.06 22 / 0.3)';
+
+  return (
+    <div style={{
+      background: 'white',
+      border: `1px solid ${accentBorder}`,
+      borderRadius: 'var(--radius)',
+      overflow: 'hidden',
+      boxShadow: `var(--shadow-sm), 0 0 0 0px ${accentColor}`,
+      transition: 'all 0.2s',
+      cursor: 'default',
+    }}
+    onMouseEnter={e => { e.currentTarget.style.boxShadow = `var(--shadow-md), 0 0 0 1.5px ${accentColor}20`; e.currentTarget.style.transform = 'translateY(-2px)'; }}
+    onMouseLeave={e => { e.currentTarget.style.boxShadow = 'var(--shadow-sm)'; e.currentTarget.style.transform = 'translateY(0)'; }}
+    >
+      {/* Color bar top */}
+      <div style={{ height: 3, background: `linear-gradient(to right, ${accentColor}, ${accentColor}66)` }}></div>
+
+      <div style={{ padding: '18px 20px' }}>
+        {/* Header row */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <ScoreRing score={t.score} />
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--navy)', fontFamily: 'Space Grotesk', letterSpacing: '-0.01em' }}>{t.symbol}</div>
+              <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginTop: 1 }}>{t.name}</div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+            <SignalBadge signal={t.signal} />
+            <div style={{ fontSize: 10, color: 'var(--text-tertiary)', fontFamily: "'DM Mono'" }}>{t.date}</div>
+          </div>
+        </div>
+
+        {/* P&L hero */}
+        <div style={{
+          background: accentLight,
+          border: `1px solid ${accentBorder}`,
+          borderRadius: 10,
+          padding: '12px 16px',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginBottom: 14,
+        }}>
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: accentColor, opacity: 0.7, marginBottom: 4 }}>Live P&amp;L</div>
+            <div style={{ fontFamily: "'DM Mono'", fontSize: 22, fontWeight: 600, color: accentColor, letterSpacing: '-0.02em' }}>
+              {pos ? '+' : ''}{t.pnl.toFixed(2)}
+            </div>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: accentColor, opacity: 0.7, marginBottom: 4 }}>Return</div>
+            <div style={{ fontFamily: "'DM Mono'", fontSize: 22, fontWeight: 600, color: accentColor }}>
+              {pos ? '+' : ''}{t.pnlPct.toFixed(2)}%
+            </div>
+          </div>
+          <StatusBadge status={t.status} />
+        </div>
+
+        {/* Price row */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginBottom: 14 }}>
+          {[
+            { label: 'Entry', value: t.entry.toLocaleString('en-IN'), color: 'var(--text-primary)' },
+            { label: 'Target', value: t.target.toLocaleString('en-IN'), color: 'var(--green)' },
+            { label: 'Stop Loss', value: t.sl.toLocaleString('en-IN'), color: 'var(--red)' },
+          ].map(item => (
+            <div key={item.label} style={{ background: 'oklch(0.975 0.005 265)', borderRadius: 8, padding: '10px 12px' }}>
+              <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-tertiary)', marginBottom: 5 }}>{item.label}</div>
+              <div style={{ fontFamily: "'DM Mono'", fontSize: 13, fontWeight: 500, color: item.color }}>{item.value}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Progress bar */}
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--text-tertiary)', marginBottom: 5 }}>
+            <span>SL: {t.sl.toLocaleString('en-IN')}</span>
+            <span style={{ color: accentColor, fontWeight: 600 }}>{pos ? `${progress.toFixed(0)}% to target` : `${progress.toFixed(0)}% to SL`}</span>
+            <span>T: {t.target.toLocaleString('en-IN')}</span>
+          </div>
+          <div style={{ height: 5, background: 'oklch(0.93 0.01 265)', borderRadius: 99, overflow: 'hidden', position: 'relative' }}>
+            <div style={{
+              position: 'absolute', left: 0, top: 0, height: '100%',
+              width: `${Math.min(progress, 100)}%`,
+              background: accentColor,
+              borderRadius: 99,
+              transition: 'width 0.6s ease',
+            }}></div>
+          </div>
+        </div>
+
+        {/* Buy range */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+            Buy range: <span style={{ fontFamily: "'DM Mono'", color: 'var(--text-secondary)' }}>{t.range}</span>
+          </div>
+          <button onClick={() => setExpanded(x => !x)} style={{
+            border: 'none', background: 'none', cursor: 'pointer',
+            fontSize: 11, color: 'var(--navy-soft)', fontFamily: 'Space Grotesk',
+            fontWeight: 500, display: 'flex', alignItems: 'center', gap: 4,
+            padding: '2px 0',
+          }}>
+            {expanded ? 'Hide' : 'View'} reason
+            <span style={{ fontSize: 9, transform: expanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s', display: 'inline-block' }}>▼</span>
+          </button>
+        </div>
+
+        {/* Expandable reason */}
+        {expanded && (
+          <div style={{
+            marginTop: 12, padding: '12px 14px',
+            background: 'oklch(0.975 0.005 265)',
+            borderRadius: 8,
+            fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.65,
+            fontFamily: 'Space Grotesk',
+            animation: 'fadeUp 0.2s ease',
+          }}>
+            {t.reason}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ActiveTradesPage() {
+  const winners = ACTIVE_TRADES.filter(t => t.pnl > 0);
+  const losers = ACTIVE_TRADES.filter(t => t.pnl < 0);
+  const totalPnl = ACTIVE_TRADES.reduce((a, t) => a + t.pnl, 0);
+  const avgPct = ACTIVE_TRADES.reduce((a, t) => a + t.pnlPct, 0) / ACTIVE_TRADES.length;
+
+  return (
+    <div className="fade-up" style={{ padding: '24px 28px', height: '100%', display: 'flex', flexDirection: 'column', gap: 20, overflowY: 'auto' }}>
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <div className="section-title">Active Trades</div>
+          <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 4 }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--green)', display: 'inline-block', animation: 'pulse-dot 2s infinite' }}></span>
+              Live · {ACTIVE_TRADES.length} open positions
+            </span>
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button className="btn-ghost">Refresh P&L</button>
+          <button className="btn-primary" style={{ background: 'var(--green)' }}>Check Target/SL Hit</button>
+        </div>
+      </div>
+
+      {/* Summary bar */}
+      <div style={{ display: 'flex', gap: 14 }}>
+        {[
+          { label: 'Open', value: ACTIVE_TRADES.length, color: 'var(--navy)' },
+          { label: 'Winners', value: winners.length, color: 'var(--green)' },
+          { label: 'Losers', value: losers.length, color: 'var(--red)' },
+          { label: 'Total P&L', value: (totalPnl >= 0 ? '+' : '') + totalPnl.toFixed(2), color: totalPnl >= 0 ? 'var(--green)' : 'var(--red)' },
+          { label: 'Avg Return', value: (avgPct >= 0 ? '+' : '') + avgPct.toFixed(2) + '%', color: avgPct >= 0 ? 'var(--green)' : 'var(--red)' },
+        ].map(c => (
+          <div key={c.label} className="stat-card" style={{ flexGrow: 0 }}>
+            <div style={{ fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-tertiary)', marginBottom: 8 }}>{c.label}</div>
+            <div style={{ fontSize: 22, fontWeight: 700, fontFamily: "'DM Mono'", color: c.color }}>{c.value}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Cards grid */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, paddingBottom: 24 }}>
+        {ACTIVE_TRADES.map(t => <TradeCard key={t.symbol} t={t} />)}
+      </div>
+    </div>
+  );
+}
+
+function AnalyticsPage() {
+  const [period, setPeriod] = useState('All');
+  const [filter, setFilter] = useState('All');
+  const periods = ['1W', '15D', '1M', '3M', 'All'];
+  const filters = ['All', 'Target Hit', 'SL Hit', 'Open'];
+
+  const data = ANALYTICS_TRADES.filter(t => filter === 'All' || t.status === filter);
+  const winRate = (ANALYTICS_TRADES.filter(t => t.status === 'Target Hit').length / ANALYTICS_TRADES.length * 100).toFixed(1);
+  const targetsHit = ANALYTICS_TRADES.filter(t => t.status === 'Target Hit').length;
+  const slHit = ANALYTICS_TRADES.filter(t => t.status === 'SL Hit').length;
+  const avgPnl = (ANALYTICS_TRADES.reduce((a, t) => a + t.pnlPct, 0) / ANALYTICS_TRADES.length).toFixed(2);
+  const avgDays = (ANALYTICS_TRADES.reduce((a, t) => a + t.days, 0) / ANALYTICS_TRADES.length).toFixed(1);
+
+  return (
+    <div className="fade-up" style={{ padding: '24px 28px', height: '100%', display: 'flex', flexDirection: 'column', gap: 20, overflowY: 'auto' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div className="section-title">Trade Analytics</div>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <div className="tab-group">
+            {periods.map(p => (
+              <button key={p} className={`tab ${period === p ? 'active' : ''}`} onClick={() => setPeriod(p)}>{p}</button>
+            ))}
+          </div>
+          <div className="tab-group">
+            {filters.map(f => (
+              <button key={f} className={`tab ${filter === f ? 'active' : ''}`} onClick={() => setFilter(f)}>{f}</button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Stats */}
+      <div style={{ display: 'flex', gap: 14 }}>
+        {[
+          { label: 'Total Trades', value: ANALYTICS_TRADES.length, color: 'var(--text-primary)' },
+          { label: 'Win Rate', value: winRate + '%', color: 'var(--green)' },
+          { label: 'Targets Hit', value: targetsHit, color: 'var(--green)' },
+          { label: 'SL Hit', value: slHit, color: 'var(--red)' },
+          { label: 'Avg P&L %', value: avgPnl + '%', color: Number(avgPnl) >= 0 ? 'var(--green)' : 'var(--red)' },
+          { label: 'Avg Days Held', value: avgDays, color: 'var(--text-primary)' },
+        ].map(s => (
+          <div key={s.label} className="stat-card">
+            <div style={{ fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-tertiary)', marginBottom: 10 }}>{s.label}</div>
+            <div style={{ fontSize: 26, fontWeight: 700, fontFamily: "'DM Mono'", color: s.color, letterSpacing: '-0.02em' }}>{s.value}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Win rate bar */}
+      <div style={{ background: 'white', borderRadius: 'var(--radius)', border: '1px solid var(--border)', padding: '18px 22px', boxShadow: 'var(--shadow-sm)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12, fontSize: 12, color: 'var(--text-secondary)' }}>
+          <span>Win / Loss Distribution</span>
+          <span style={{ fontFamily: "'DM Mono'", fontWeight: 500 }}>{targetsHit} wins · {slHit} losses · {ANALYTICS_TRADES.filter(t=>t.status==='Open').length} open</span>
+        </div>
+        <div style={{ height: 10, background: 'var(--red-bg)', borderRadius: 99, overflow: 'hidden', display: 'flex' }}>
+          <div style={{ width: `${winRate}%`, background: 'var(--green)', borderRadius: 99, transition: 'width 0.5s ease' }}></div>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontSize: 11, color: 'var(--text-tertiary)' }}>
+          <span style={{ color: 'var(--green)' }}>{winRate}% Win Rate</span>
+          <span style={{ color: 'var(--red)' }}>{(100 - winRate).toFixed(1)}% Loss Rate</span>
+        </div>
+      </div>
+
+      {/* Table */}
+      <div style={{ background: 'white', borderRadius: 'var(--radius)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-sm)', overflow: 'hidden', flex: 1 }}>
+        <div style={{ overflowX: 'auto' }}>
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th><th>Symbol</th><th>Signal</th><th>Score</th>
+                <th>Entry</th><th>Target</th><th>SL</th><th>Status</th>
+                <th>P&L</th><th>Days</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.map(t => (
+                <tr key={t.symbol + t.date}>
+                  <td style={{ color: 'var(--text-tertiary)', fontSize: 11 }}>{t.date}</td>
+                  <td>
+                    <div style={{ fontWeight: 600, fontSize: 13, fontFamily: 'Space Grotesk', color: 'var(--navy)' }}>{t.symbol}</div>
+                    <div style={{ fontSize: 10, color: 'var(--text-tertiary)', fontFamily: 'Space Grotesk' }}>{t.name}</div>
+                  </td>
+                  <td><SignalBadge signal={t.signal} /></td>
+                  <td><ScoreRing score={t.score} /></td>
+                  <td>{t.entry.toLocaleString('en-IN')}</td>
+                  <td style={{ color: 'var(--green)' }}>{t.target.toLocaleString('en-IN')}</td>
+                  <td style={{ color: 'var(--red)' }}>{t.sl.toLocaleString('en-IN')}</td>
+                  <td><StatusBadge status={t.status} /></td>
+                  <td><PnLCell pnl={t.pnl} pnlPct={t.pnlPct} /></td>
+                  <td style={{ color: 'var(--text-secondary)' }}>{t.days}d</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const CAT_ICONS = { 'Entry': '▲', 'Risk': '⬡', 'Exit': '●', 'Mindset': '◆' };
+const CAT_COLORS = {
+  'Entry': { bg: 'oklch(0.96 0.04 265)', color: 'var(--navy)', border: 'oklch(0.88 0.06 265)' },
+  'Risk': { bg: 'var(--red-bg)', color: 'var(--red)', border: 'var(--red-border)' },
+  'Exit': { bg: 'var(--green-bg)', color: 'var(--green)', border: 'var(--green-border)' },
+  'Mindset': { bg: 'var(--gold-bg)', color: 'var(--gold)', border: 'oklch(0.87 0.08 75)' },
+};
+
+function TradingRulesPage() {
+  const [active, setActive] = useState('All');
+  const categories = ['All', 'Entry', 'Risk', 'Exit', 'Mindset'];
+  const filtered = active === 'All' ? TRADING_RULES : TRADING_RULES.filter(r => r.category === active);
+
+  return (
+    <div className="fade-up" style={{ padding: '24px 28px', height: '100%', display: 'flex', flexDirection: 'column', gap: 24, overflowY: 'auto' }}>
+      {/* Hero */}
+      <div style={{
+        background: 'linear-gradient(135deg, var(--navy) 0%, oklch(0.32 0.12 250) 100%)',
+        borderRadius: 'var(--radius)',
+        padding: '32px 36px',
+        color: 'white',
+        position: 'relative',
+        overflow: 'hidden',
+        boxShadow: 'var(--shadow-lg)',
+      }}>
+        <div style={{ position: 'absolute', right: -40, top: -40, width: 200, height: 200, borderRadius: '50%', background: 'rgba(255,255,255,0.04)' }}></div>
+        <div style={{ position: 'absolute', right: 60, bottom: -60, width: 160, height: 160, borderRadius: '50%', background: 'rgba(255,255,255,0.03)' }}></div>
+        <div style={{ position: 'relative', zIndex: 1 }}>
+          <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', opacity: 0.6, marginBottom: 10 }}>System Constitution</div>
+          <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: '-0.02em', marginBottom: 10 }}>Trading Rules</div>
+          <div style={{ fontSize: 14, opacity: 0.7, maxWidth: 560, lineHeight: 1.65 }}>
+            These are not guidelines — they are the operating system of this strategy. Every rule exists to protect capital and preserve the edge. Deviation is the only way to lose.
+          </div>
+          <div style={{ marginTop: 20, display: 'flex', gap: 20 }}>
+            {categories.slice(1).map(c => {
+              const cc = CAT_COLORS[c];
+              const count = TRADING_RULES.filter(r => r.category === c).length;
+              return (
+                <div key={c} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <div style={{ fontSize: 18, fontWeight: 700, fontFamily: "'DM Mono'" }}>{count}</div>
+                  <div style={{ fontSize: 11, opacity: 0.6 }}>{c} rules</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* Filter */}
+      <div style={{ display: 'flex', gap: 8 }}>
+        {categories.map(c => {
+          const isAll = c === 'All';
+          const cc = isAll ? null : CAT_COLORS[c];
+          const sel = active === c;
+          return (
+            <button key={c} onClick={() => setActive(c)} style={{
+              padding: '7px 18px',
+              borderRadius: 99,
+              border: `1px solid ${sel ? (isAll ? 'var(--navy)' : cc.border) : 'var(--border-strong)'}`,
+              background: sel ? (isAll ? 'var(--navy)' : cc.bg) : 'white',
+              color: sel ? (isAll ? 'white' : cc.color) : 'var(--text-secondary)',
+              fontFamily: 'Space Grotesk',
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: 'pointer',
+              transition: 'all 0.15s',
+            }}>
+              {!isAll && <span style={{ marginRight: 5 }}>{CAT_ICONS[c]}</span>}
+              {c}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Rules grid */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, paddingBottom: 24 }}>
+        {filtered.map(rule => {
+          const cc = CAT_COLORS[rule.category];
+          return (
+            <div key={rule.id} style={{
+              background: 'white',
+              borderRadius: 'var(--radius)',
+              border: '1px solid var(--border)',
+              padding: '22px 22px',
+              boxShadow: 'var(--shadow-sm)',
+              transition: 'all 0.2s',
+              cursor: 'default',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 14,
+            }}
+            onMouseEnter={e => { e.currentTarget.style.boxShadow = 'var(--shadow-md)'; e.currentTarget.style.transform = 'translateY(-2px)'; }}
+            onMouseLeave={e => { e.currentTarget.style.boxShadow = 'var(--shadow-sm)'; e.currentTarget.style.transform = 'translateY(0)'; }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div style={{ width: 32, height: 32, borderRadius: 8, background: cc.bg, border: `1px solid ${cc.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, color: cc.color }}>
+                    {CAT_ICONS[rule.category]}
+                  </div>
+                  <span className="pill" style={{ background: cc.bg, color: cc.color, border: `1px solid ${cc.border}`, fontSize: 10 }}>{rule.category}</span>
+                </div>
+                <div style={{ fontFamily: "'DM Mono'", fontSize: 10, color: 'var(--text-tertiary)', fontWeight: 500 }}>#{String(rule.id).padStart(2,'0')}</div>
+              </div>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--text-primary)', letterSpacing: '-0.01em', marginBottom: 8 }}>{rule.title}</div>
+                <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.65 }}>{rule.body}</div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ─── Main App ─── */
+const NAV_ITEMS = [
+  { id: 'screener', label: 'Screener', icon: (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.5"/><path d="M11 11l3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+  )},
+  { id: 'trades', label: 'Active Trades', icon: (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 12l4-4 3 3 5-6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+  )},
+  { id: 'analytics', label: 'Analytics', icon: (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="2" y="10" width="3" height="4" rx="1" fill="currentColor" opacity=".5"/><rect x="6.5" y="6" width="3" height="8" rx="1" fill="currentColor" opacity=".7"/><rect x="11" y="2" width="3" height="12" rx="1" fill="currentColor"/></svg>
+  )},
+  { id: 'rules', label: 'Trading Rules', icon: (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="12" height="12" rx="2" stroke="currentColor" strokeWidth="1.5"/><path d="M5 6h6M5 9h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+  )},
+];
+
+function App() {
+  const [page, setPage] = useState('screener');
+
+  const pageMap = {
+    screener: <ScreenerPage />,
+    trades: <ActiveTradesPage />,
+    analytics: <AnalyticsPage />,
+    rules: <TradingRulesPage />,
+  };
+
+  return (
+    <div style={{ height: '100vh', display: 'flex', overflow: 'hidden' }}>
+      {/* Sidebar */}
+      <div style={{
+        width: 220,
+        background: 'rgba(255,255,255,0.82)',
+        backdropFilter: 'blur(16px)',
+        borderRight: '1px solid var(--border)',
+        display: 'flex',
+        flexDirection: 'column',
+        flexShrink: 0,
+        boxShadow: '2px 0 16px rgba(0,0,0,0.04)',
+        zIndex: 10,
+      }}>
+        {/* Logo */}
+        <div style={{ padding: '22px 20px 20px', borderBottom: '1px solid var(--border)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{
+              width: 34, height: 34, borderRadius: 9,
+              background: 'linear-gradient(135deg, var(--navy) 0%, var(--navy-mid) 100%)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontWeight: 700, fontSize: 12, color: 'white', letterSpacing: '0.02em',
+              boxShadow: '0 2px 8px rgba(30,27,75,0.3)',
+            }}>SV</div>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 13, letterSpacing: '-0.01em', color: 'var(--text-primary)' }}>Stockvest</div>
+              <div style={{ fontSize: 9, fontWeight: 500, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>Precision Curator</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Nav */}
+        <nav style={{ flex: 1, padding: '16px 10px' }}>
+          {NAV_ITEMS.map(n => {
+            const active = page === n.id;
+            return (
+              <button key={n.id} onClick={() => setPage(n.id)} style={{
+                width: '100%', display: 'flex', alignItems: 'center', gap: 10,
+                padding: '10px 12px', borderRadius: 'var(--radius-sm)',
+                background: active ? 'var(--navy)' : 'transparent',
+                color: active ? 'white' : 'var(--text-secondary)',
+                border: 'none', cursor: 'pointer', marginBottom: 2,
+                fontFamily: 'Space Grotesk', fontSize: 13, fontWeight: active ? 600 : 500,
+                transition: 'all 0.15s',
+                textAlign: 'left',
+              }}
+              onMouseEnter={e => { if (!active) { e.currentTarget.style.background = 'oklch(0.94 0.01 265)'; e.currentTarget.style.color = 'var(--text-primary)'; }}}
+              onMouseLeave={e => { if (!active) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-secondary)'; }}}
+              >
+                <span style={{ opacity: active ? 1 : 0.7 }}>{n.icon}</span>
+                {n.label}
+              </button>
+            );
+          })}
+        </nav>
+
+        {/* Footer */}
+        <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border)' }}>
+          <div style={{ fontSize: 10, color: 'var(--text-tertiary)', fontFamily: "'DM Mono'" }}>v4.0</div>
+        </div>
+      </div>
+
+      {/* Main */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        {/* Top bar */}
+        <div style={{
+          height: 56, background: 'rgba(255,255,255,0.82)',
+          backdropFilter: 'blur(16px)',
+          borderBottom: '1px solid var(--border)',
+          display: 'flex', alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '0 28px',
+          flexShrink: 0,
+          zIndex: 9,
+          boxShadow: '0 1px 8px rgba(0,0,0,0.04)',
+        }}>
+          <div style={{ fontFamily: "'DM Mono'", fontSize: 13, color: 'var(--text-secondary)', fontWeight: 400 }}>
+            27 Apr 2026
+          </div>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <div style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--green)', animation: 'pulse-dot 2s infinite' }}></div>
+            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>IB Connected</span>
+            <button className="btn-ghost" style={{ marginLeft: 4 }}>Connect</button>
+            <button className="btn-primary">Refresh</button>
+          </div>
+        </div>
+
+        {/* Page content */}
+        <div style={{ flex: 1, overflow: 'hidden' }}>
+          {pageMap[page]}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
