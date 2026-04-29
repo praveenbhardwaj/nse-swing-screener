@@ -2255,6 +2255,9 @@ def run_trade_outcome_check():
             if not added:
                 return
             entry_day = pd.Timestamp(str(added)).normalize()
+            # If a trade was recorded with time, entry may be intraday. In that case,
+            # daily OHLC for the entry date can include pre-entry moves and must be ignored.
+            has_intraday_entry_time = bool(str(trade.get("added_time") or "").strip())
             if entry_day >= today:
                 return
             df = yf.Ticker(f"{sym}.NS").history(
@@ -2272,16 +2275,19 @@ def run_trade_outcome_check():
             if df is None or df.empty:
                 return
             for dt, row in df.iterrows():
+                dt_norm = dt.normalize().tz_localize(None) if dt.tzinfo else dt.normalize()
+                if has_intraday_entry_time and dt_norm.date() == entry_day.date():
+                    continue
                 low = float(row["Low"])
                 high = float(row["High"])
-                days = max((dt.date() - entry_day.date()).days + 1, 1)
+                days = max((dt_norm.date() - entry_day.date()).days + 1, 1)
                 if high >= t1:
                     pnl = round(t1 - entry, 2)
                     pnl_pct = round((pnl / entry) * 100, 2) if entry > 0 else 0
                     with upd_lock:
                         updates_by_id[tid] = {
                             "trade": trade, "status": "target_hit",
-                            "outcome_date": dt.date().isoformat(),
+                            "outcome_date": dt_norm.date().isoformat(),
                             "days_held": days, "pnl": pnl, "pnl_pct": pnl_pct,
                         }
                     break
@@ -2291,7 +2297,7 @@ def run_trade_outcome_check():
                     with upd_lock:
                         updates_by_id[tid] = {
                             "trade": trade, "status": "sl_hit",
-                            "outcome_date": dt.date().isoformat(),
+                            "outcome_date": dt_norm.date().isoformat(),
                             "days_held": days, "pnl": pnl, "pnl_pct": pnl_pct,
                         }
                     break
@@ -2327,6 +2333,8 @@ def run_trade_outcome_check():
                 if not added:
                     continue
                 actual_entry_day = pd.Timestamp(str(added)).normalize()
+                has_intraday_entry_time = bool(str(trade.get("added_time") or "").strip())
+                is_intraday_entry_today = has_intraday_entry_time and actual_entry_day == today
                 if actual_entry_day > today:
                     continue
                 quote = ltp_prices.get(sym) or {}
@@ -2336,7 +2344,24 @@ def run_trade_outcome_check():
                 day_high = float(quote.get("day_high") or ltp)
                 day_low = float(quote.get("day_low") or ltp)
                 days_held = max((today.date() - actual_entry_day.date()).days + 1, 1)
-                if day_high >= t1:
+                if is_intraday_entry_today:
+                    if ltp >= t1:
+                        pnl = round(t1 - entry, 2)
+                        pnl_pct = round((pnl / entry) * 100, 2) if entry > 0 else 0
+                        updates_by_id[tid] = {
+                            "trade": trade, "status": "target_hit",
+                            "outcome_date": today.date().isoformat(),
+                            "days_held": days_held, "pnl": pnl, "pnl_pct": pnl_pct,
+                        }
+                    elif ltp <= sl:
+                        pnl = round(sl - entry, 2)
+                        pnl_pct = round((pnl / entry) * 100, 2) if entry > 0 else 0
+                        updates_by_id[tid] = {
+                            "trade": trade, "status": "sl_hit",
+                            "outcome_date": today.date().isoformat(),
+                            "days_held": days_held, "pnl": pnl, "pnl_pct": pnl_pct,
+                        }
+                elif day_high >= t1:
                     pnl = round(t1 - entry, 2)
                     pnl_pct = round((pnl / entry) * 100, 2) if entry > 0 else 0
                     updates_by_id[tid] = {
@@ -2364,6 +2389,8 @@ def run_trade_outcome_check():
                             for dt, row in hist_recent.iterrows():
                                 dt_norm = dt.normalize().tz_localize(None) if dt.tzinfo else dt.normalize()
                                 if dt_norm < actual_entry_day:
+                                    continue
+                                if has_intraday_entry_time and dt_norm.date() == actual_entry_day.date():
                                     continue
                                 h = float(row["High"])
                                 l = float(row["Low"])
