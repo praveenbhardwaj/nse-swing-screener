@@ -790,6 +790,7 @@ details>summary::-webkit-details-marker{display:none}
         <button class="period-pill status-filter" data-status="sl_hit">SL Hit</button>
         <button class="period-pill status-filter" data-status="open">Open</button>
       </div>
+      <button class="btn btn-p" onclick="exportClosedTradesCsv()">Export CSV</button>
       <button class="btn btn-g" onclick="loadClosedTrades()">Refresh</button>
     </div>
   </div>
@@ -1498,6 +1499,52 @@ function renderClosedTradesTable(){
   el.innerHTML=`<div class="tscroll"><table>
     <thead><tr><th>Date</th><th>Symbol</th><th>Signal</th><th>Score</th><th>Entry</th><th>Target</th><th>SL</th><th>Status</th><th>P&L</th><th>Days</th><th>Reason</th></tr></thead>
     <tbody>${rows}</tbody></table></div>`;
+}
+
+function exportClosedTradesCsv(){
+  const statusFilter=document.querySelector(".status-filter.active")?.dataset.status||"";
+  const filtered=statusFilter?closedTradesData.filter(t=>t.status===statusFilter):closedTradesData;
+  if(!filtered.length){
+    showToast("No analytics trades to export for this filter.","info");
+    return;
+  }
+  const toCsvValue=(value)=>{
+    const str=String(value??"");
+    return `"${str.replace(/"/g,'""')}"`;
+  };
+  const header=[
+    "Date","Symbol","Name","Signal","Score","Entry Price","Target","Stop Loss",
+    "Status","PnL","PnL %","Days Held","Reason"
+  ];
+  const rows=filtered.map(t=>[
+    t.added_date||"",
+    t.symbol||"",
+    t.name||"",
+    t.signal||"",
+    t.score??"",
+    +(t.entry_price||0),
+    +(t.target||0),
+    +(t.stop_loss||0),
+    t.status||"",
+    +(t.pnl||0),
+    +(t.pnl_pct||0),
+    t.days_held??"",
+    t.reason||""
+  ]);
+  const csv=[header,...rows].map(row=>row.map(toCsvValue).join(",")).join("\n");
+  const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");
+  const daysFilter=document.querySelector(".period-pill.active")?.dataset.days||"all";
+  const statusLabel=statusFilter||"all";
+  const dateLabel=new Date().toISOString().slice(0,10);
+  a.href=url;
+  a.download=`trade-analytics-${daysFilter}d-${statusLabel}-${dateLabel}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showToast(`Exported ${filtered.length} trade(s) to CSV.`,"ok");
 }
 
 // ── HELPERS ───────────────────────────────────────────────────
