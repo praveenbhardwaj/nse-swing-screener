@@ -695,11 +695,11 @@ details>summary::-webkit-details-marker{display:none}
     <div class="fg" style="flex:1">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
         <span class="fg-lbl">Minimum Score</span>
-        <span class="range-val" id="minScoreDisp">70</span>
+        <span class="range-val" id="minScoreDisp">75</span>
       </div>
       <div class="fg-row">
-        <input type="range" id="minScore" min="0" max="90" step="5" value="70" oninput="document.getElementById('minScoreLbl').textContent=this.value">
-        <span id="minScoreLbl" style="display:none">70</span>
+        <input type="range" id="minScore" min="0" max="90" step="5" value="75" oninput="document.getElementById('minScoreLbl').textContent=this.value">
+        <span id="minScoreLbl" style="display:none">75</span>
       </div>
     </div>
     <div class="run-area">
@@ -820,7 +820,7 @@ details>summary::-webkit-details-marker{display:none}
   <div class="rules-grid">
     <div class="rule-card"><div class="rule-meta"><span class="rule-cat cat-entry">▲ Entry</span><span class="rule-id">#01</span></div><div class="rule-head">Wait for the Signal</div><div class="rule-body">Never enter before the screener emits BUY or STRONG BUY. Anticipation is speculation; patience is edge.</div></div>
     <div class="rule-card"><div class="rule-meta"><span class="rule-cat cat-entry">▲ Entry</span><span class="rule-id">#02</span></div><div class="rule-head">Buy Within the Range</div><div class="rule-body">Execute only inside the published buy range. Chasing above range weakens the risk-reward setup.</div></div>
-    <div class="rule-card"><div class="rule-meta"><span class="rule-cat cat-entry">▲ Entry</span><span class="rule-id">#03</span></div><div class="rule-head">Minimum Score 70</div><div class="rule-body">Take trades only when the composite score is 70 or higher to maintain quality and consistency.</div></div>
+    <div class="rule-card"><div class="rule-meta"><span class="rule-cat cat-entry">▲ Entry</span><span class="rule-id">#03</span></div><div class="rule-head">Minimum Score 75</div><div class="rule-body">Take trades only when the composite score is 75 or higher. Scores below 75 showed higher loss rates in backtests.</div></div>
     <div class="rule-card"><div class="rule-meta"><span class="rule-cat cat-risk">⬡ Risk</span><span class="rule-id">#04</span></div><div class="rule-head">Honor Stop Loss Always</div><div class="rule-body">No averaging down, no manual overrides. If price violates SL, exit. Capital protection comes first.</div></div>
     <div class="rule-card"><div class="rule-meta"><span class="rule-cat cat-risk">⬡ Risk</span><span class="rule-id">#05</span></div><div class="rule-head">Risk 1-2% Per Trade</div><div class="rule-body">Position size so a full SL hit costs only 1-2% of total capital.</div></div>
     <div class="rule-card"><div class="rule-meta"><span class="rule-cat cat-risk">⬡ Risk</span><span class="rule-id">#06</span></div><div class="rule-head">Max 6 Open Positions</div><div class="rule-body">Beyond six trades, focus drops and correlation risk rises. Wait for exits before adding new exposure.</div></div>
@@ -841,7 +841,7 @@ details>summary::-webkit-details-marker{display:none}
 function getProxy(){const m=document.querySelector('meta[name="proxy-url"]');return m?m.getAttribute("content"):"http://127.0.0.1:5001"}
 const PROXY=getProxy();
 
-const DEFAULTS={rsiMin:45,rsiMax:68,volMin:1.2,emaFilter:"at_or_above",macdFilter:"bullish_neutral",minScore:0};
+const DEFAULTS={rsiMin:45,rsiMax:68,volMin:1.2,emaFilter:"at_or_above",macdFilter:"bullish_neutral",minScore:75};
 
 // ── GLOBAL STATE ──────────────────────────────────────────────
 let allResults=[],rejectedResults=[],filteredResults=[];

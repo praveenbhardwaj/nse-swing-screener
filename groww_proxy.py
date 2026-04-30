@@ -1601,14 +1601,31 @@ def analyze_stock(sym_info, df, params, context):
     # CRISIS regime disables STRONG BUY entirely (strong_buy_score=999).
     breadth_ok = context.get("breadth", {}).get("breadth_ok", True)
 
+    # ── QUALITY FILTERS (based on backtest: 1W loss-pattern analysis) ──
+    # Filter 1: Detect generic "Market reversal" risk (no specific risk identified)
+    #   — 75% loss rate in backtests; skip these for BUY/STRONG BUY signals
+    _fund = fundamentals or {}
+    _pe = _fund.get("pe"); _de = _fund.get("de")
+    has_specific_risk = ((_pe and _pe > 60) or (_de and _de > 2.0)
+                         or (atr_pct and atr_pct > 4) or pct_below_52 < 5)
+    # Filter 2: Require Price > EMA20 > EMA50 (short-term bullish alignment)
+    #   — trades with only "above 200 EMA" but not EMA20>EMA50 hit SL 100%
+    ema_stacked = ma_detail.get("a", False)
+    # Filter 3: Minimum score 75 for BUY (lower scores cluster in losses)
+    quality_buy_score = max(75, rcfg["buy_score"])
+
     if (rcfg["allow_strong_buy"]
             and score >= rcfg["strong_buy_score"]
             and macd_sig == "bullish" and ema_pos == "above"
             and last_vol_ratio >= rcfg["strong_buy_vol"]
             and rs_ok is not False
+            and ema_stacked and has_specific_risk
             and (regime not in (REGIME_BEAR, REGIME_CRISIS) or higher_lows_ok)):
         sig = "STRONG BUY"
-    elif score >= rcfg["buy_score"] and (macd_sig in ("bullish", "neutral") or macd_cross_5d) and ema_pos in ("above", "at"):
+    elif (score >= quality_buy_score
+            and (macd_sig in ("bullish", "neutral") or macd_cross_5d)
+            and ema_pos in ("above", "at")
+            and ema_stacked and has_specific_risk):
         sig = "BUY"
     else:
         sig = "WATCH"
