@@ -840,6 +840,14 @@ details>summary::-webkit-details-marker{display:none}
 <script>
 function getProxy(){const m=document.querySelector('meta[name="proxy-url"]');return m?m.getAttribute("content"):"http://127.0.0.1:5001"}
 const PROXY=getProxy();
+/** AbortSignal.timeout is missing in some browsers; fallback avoids false "backend offline". */
+function abortTimeout(ms){
+  if(typeof AbortSignal!=="undefined"&&typeof AbortSignal.timeout==="function")
+    return AbortSignal.timeout(ms);
+  const c=new AbortController();
+  setTimeout(()=>c.abort(),ms);
+  return c.signal;
+}
 
 const DEFAULTS={rsiMin:45,rsiMax:68,volMin:1.2,emaFilter:"at_or_above",macdFilter:"bullish_neutral",minScore:75};
 
@@ -894,7 +902,7 @@ async function checkProxy(){
   banner.className="proxy-banner proxy-check";
   msg.textContent="Checking backend...";
   try{
-    const r=await fetch(`${PROXY}/health`,{signal:AbortSignal.timeout(4000)});
+    const r=await fetch(`${PROXY}/health`,{signal:abortTimeout(4000)});
     const d=await r.json();
     proxyOk=true;
     banner.className="proxy-banner proxy-ok";
@@ -909,7 +917,7 @@ async function checkProxy(){
 // ── MARKET DATA ───────────────────────────────────────────────
 async function fetchMarketData(){
   try{
-    const r=await fetch(`${PROXY}/market-data`,{signal:AbortSignal.timeout(15000)});
+    const r=await fetch(`${PROXY}/market-data`,{signal:abortTimeout(15000)});
     const d=await r.json();
     if(d.nifty50){
       const n=d.nifty50,cls=n.direction==="up"?"g":"r",arr=n.direction==="up"?"^":"v";
@@ -932,7 +940,7 @@ async function loadUniverse(){
   document.getElementById("m-uni").textContent="loading...";
   document.getElementById("m-uni-sub").textContent=scope;
   try{
-    const r=await fetch(`${PROXY}/universe?index=${encodeURIComponent(scope)}`,{signal:AbortSignal.timeout(20000)});
+    const r=await fetch(`${PROXY}/universe?index=${encodeURIComponent(scope)}`,{signal:abortTimeout(20000)});
     const d=await r.json();
     universeData=d.stocks||[];
     document.getElementById("m-uni").textContent=universeData.length.toLocaleString("en-IN");
@@ -1214,7 +1222,7 @@ function renderRejected(data){
 async function refreshPrices(){
   if(!allResults.length)return;
   try{
-    const r=await fetch(`${PROXY}/ltp?symbols=${allResults.map(r=>r.sym).join(",")}`,{signal:AbortSignal.timeout(10000)});
+    const r=await fetch(`${PROXY}/ltp?symbols=${allResults.map(r=>r.sym).join(",")}`,{signal:abortTimeout(10000)});
     const d=await r.json();
     const prices=d.prices||{};
     allResults=allResults.map(row=>{
@@ -1287,7 +1295,7 @@ function switchTab(name){
 // ── ACTIVE TRADES ─────────────────────────────────────────────
 async function loadActiveTrades(){
   try{
-    const r=await fetch(`${PROXY}/active-trades`,{signal:AbortSignal.timeout(20000)});
+    const r=await fetch(`${PROXY}/active-trades`,{signal:abortTimeout(20000)});
     const d=await r.json();
     if(!d.ok)return;
     activeTradesCache=d.trades||[];
@@ -1404,7 +1412,7 @@ async function refreshActivePnL(){
     const open=[...activeTradesCache];
     if(!open.length){stopActivePnlAutoRefresh();return;}
     const syms=open.map(t=>t.symbol).join(",");
-    const lr=await fetch(`${PROXY}/ltp?symbols=${syms}`,{signal:AbortSignal.timeout(10000)});
+    const lr=await fetch(`${PROXY}/ltp?symbols=${syms}`,{signal:abortTimeout(10000)});
     const ld=await lr.json();
     const prices=ld.prices||{};
     renderActiveTradesTable(open,prices);
@@ -1426,7 +1434,7 @@ async function checkOutcomes(){
   const btn=document.getElementById("checkOutcomesBtn");
   btn.disabled=true;btn.textContent="Checking...";
   try{
-    const r=await fetch(`${PROXY}/check-outcomes`,{method:"POST",signal:AbortSignal.timeout(120000)});
+    const r=await fetch(`${PROXY}/check-outcomes`,{method:"POST",signal:abortTimeout(120000)});
     const d=await r.json();
     if(d.ok){
       const msg=d.updated>0
@@ -1447,7 +1455,7 @@ async function loadClosedTrades(){
   const days=document.querySelector(".period-pill.active")?.dataset.days||"";
   const url=days?`${PROXY}/closed-trades?days=${days}`:`${PROXY}/closed-trades`;
   try{
-    const r=await fetch(url,{signal:AbortSignal.timeout(10000)});
+    const r=await fetch(url,{signal:abortTimeout(10000)});
     const d=await r.json();
     if(!d.ok){showToast(d.error||"Failed to load.","err");return;}
     closedTradesData=d.trades||[];

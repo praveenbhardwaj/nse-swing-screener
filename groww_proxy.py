@@ -135,14 +135,21 @@ except Exception as _sb_err:
 #
 # Credentials priority (highest → lowest):
 #   1. Session-level override via POST /set-credentials (stored in _session_*)
-#   2. Environment variables GROWW_API_KEY / GROWW_API_SECRET
+#   2. Environment variables GROWW_API_KEY / GROWW_API_SECRET (if set, override hardcoded)
+#   3. Hardcoded defaults below (used when env vars are empty)
 #
-# If neither is available, live price falls back to yfinance.
+# If none of the above yield a key+secret, live price falls back to yfinance.
+# WARNING: Hardcoded secrets in source are exposed to anyone with repo/server access.
+# Prefer env vars on shared hosts; rotate keys if this file was ever leaked.
 # ══════════════════════════════════════════════════════════════════════
 
-# Load from environment (never hardcode secrets in source)
-API_KEY    = os.environ.get("GROWW_API_KEY", "").strip()
-API_SECRET = os.environ.get("GROWW_API_SECRET", "").strip()
+_HARDCODED_GROWW_API_KEY = (
+    "eyJraWQiOiJaTUtjVXciLCJhbGciOiJFUzI1NiJ9.eyJleHAiOjI1NjcyMTc5NTQsImlhdCI6MTc3ODgxNzk1NCwibmJmIjoxNzc4ODE3OTU0LCJzdWIiOiJ7XCJ0b2tlblJlZklkXCI6XCI2ZmQ2MjU3Ny00ZjRmLTQ2ODEtOWJjYy0yYjM1NTllODMwZWRcIixcInZlbmRvckludGVncmF0aW9uS2V5XCI6XCJlMzFmZjIzYjA4NmI0MDZjODg3NGIyZjZkODQ5NTMxM1wiLFwidXNlckFjY291bnRJZFwiOlwiMGFlMDJiYmMtMjdhOS00OGQ3LWFjNWUtZjkxODA0ZTlhMDc1XCIsXCJkZXZpY2VJZFwiOlwiNGUxZDI1OWItODNmMi01NzAyLTg3ZDMtZDE5MTExYjJmY2FmXCIsXCJzZXNzaW9uSWRcIjpcImY4YTU4YTY2LTAzNTUtNGUzMS1iYjY1LWIzODA2YmE1MzMxNFwiLFwiYWRkaXRpb25hbERhdGFcIjpcIno1NC9NZzltdjE2WXdmb0gvS0EwYklUT2hnRmFrdHd6V21OL0FPUDFwdkJSTkczdTlLa2pWZDNoWjU1ZStNZERhWXBOVi9UOUxIRmtQejFFQisybTdRPT1cIixcInJvbGVcIjpcImF1dGgtdG90cFwiLFwic291cmNlSXBBZGRyZXNzXCI6XCIyNDAxOjQ5MDA6MWYzOTozNjJlOmYwMmY6OGY4ZDoxNWMwOmMzM2UsMTcyLjY4LjM5LjE5NCwzNS4yNDEuMjMuMTIzXCIsXCJ0d29GYUV4cGlyeVRzXCI6MjU2NzIxNzk1NDc2NyxcInZlbmRvck5hbWVcIjpcImdyb3d3QXBpXCJ9IiwiaXNzIjoiYXBleC1hdXRoLXByb2QtYXBwIn0.G-EWpvSVNsF3XkZbhjELWlyNxnqIy8prSdVQYHDheHbFkjq0MZszeQW1vGNjrEZmZuvwlgBVtt5l_R3mYs678Q"
+)
+_HARDCODED_GROWW_API_SECRET = "GMBSEFQ&RpuYD#ba0su!DMW3554GZ%Iu"
+
+API_KEY    = os.environ.get("GROWW_API_KEY", "").strip() or _HARDCODED_GROWW_API_KEY.strip()
+API_SECRET = os.environ.get("GROWW_API_SECRET", "").strip() or _HARDCODED_GROWW_API_SECRET.strip()
 BASE_URL   = "https://api.groww.in/v1"
 
 app = Flask(__name__)
@@ -157,6 +164,23 @@ _cred_lock = threading.Lock()  # Protects _session_* and token cache
 def generate_checksum(secret, timestamp):
     """Create SHA-256 authentication signature: SHA256(secret + timestamp)."""
     return hashlib.sha256((secret + timestamp).encode()).hexdigest()
+
+
+def _extract_access_token_from_token_response(body):
+    """Parse access token from POST /token/api/access JSON (shape varies by API version)."""
+    if not isinstance(body, dict):
+        return None
+    for key in ("token", "access_token", "accessToken"):
+        val = body.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    inner = body.get("payload")
+    if isinstance(inner, dict):
+        for key in ("token", "access_token", "accessToken"):
+            val = inner.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+    return None
 
 
 def _token_error_details(resp):
@@ -193,7 +217,11 @@ def _request_access_token(key, secret):
         try:
             resp = requests.post(
                 f"{BASE_URL}/token/api/access",
-                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                headers={
+                    "Authorization": f"Bearer {key}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
                 json=body,
                 timeout=10)
         except Exception as e:
@@ -208,8 +236,7 @@ def _request_access_token(key, secret):
                 details["retry_after_seconds"] = retry_after
             details["request_body"] = body
             return None, details
-        payload = details.get("payload") or {}
-        token = payload.get("token")
+        token = _extract_access_token_from_token_response(details.get("payload") or {})
         if token:
             return token, None
         details["request_body"] = body
@@ -1874,12 +1901,20 @@ def _fetch_ltp_batch(symbols):
                     groww_available = False
                 elif d.get("status") == "SUCCESS":
                     p = d["payload"]
-                    ltp = p.get("last_price") or p.get("ltp")
-                    if ltp:
+                    ohlc = p.get("ohlc") if isinstance(p.get("ohlc"), dict) else {}
+                    ltp_raw = p.get("last_price")
+                    if ltp_raw is None:
+                        ltp_raw = p.get("ltp")
+                    if ltp_raw is None and ohlc:
+                        ltp_raw = ohlc.get("close")
+                    if ltp_raw is not None:
+                        ltp = float(ltp_raw)
+                        hi_raw = p.get("high_price") or p.get("day_high") or ohlc.get("high")
+                        lo_raw = p.get("low_price") or p.get("day_low") or ohlc.get("low")
                         prices[sym] = {
-                            "ltp": float(ltp),
-                            "day_high": float(p.get("high_price") or p.get("day_high") or ltp),
-                            "day_low": float(p.get("low_price") or p.get("day_low") or ltp),
+                            "ltp": ltp,
+                            "day_high": float(hi_raw) if hi_raw is not None else ltp,
+                            "day_low": float(lo_raw) if lo_raw is not None else ltp,
                             "change": round(p.get("day_change") or 0, 2),
                             "change_pct": round(p.get("day_change_perc") or 0, 2),
                             "source": "groww",
