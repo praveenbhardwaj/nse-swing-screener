@@ -410,6 +410,7 @@ tbody tr{animation:fadeUp .2s ease both}
 .sb-open{background:var(--accent-lt);color:var(--accent);border:1px solid var(--accent-br)}
 .sb-target{background:var(--green-lt);color:var(--green);border:1px solid var(--green-br)}
 .sb-sl{background:var(--red-lt);color:var(--red);border:1px solid var(--red-br)}
+.sb-overdue{background:var(--amber-lt);color:var(--amber);border:1px solid var(--amber-br)}
 
 /* ═══════════════ ACTIVE TRADES PANEL ═══════════════ */
 .active-trades{background:#fff;border:1px solid var(--border);border-radius:var(--r);padding:18px 20px;box-shadow:var(--shadow)}
@@ -788,6 +789,7 @@ details>summary::-webkit-details-marker{display:none}
         <button class="period-pill status-filter active" data-status="">All</button>
         <button class="period-pill status-filter" data-status="target_hit">Target Hit</button>
         <button class="period-pill status-filter" data-status="sl_hit">SL Hit</button>
+        <button class="period-pill status-filter" data-status="overdue">Overdue</button>
         <button class="period-pill status-filter" data-status="open">Open</button>
       </div>
       <button class="btn btn-p" onclick="exportClosedTradesCsv()">Export CSV</button>
@@ -1484,11 +1486,15 @@ function renderAnalyticsStats(){
   const a=closedAnalytics;
   const el=document.getElementById("analyticsStats");
   const pnlColor=(a.total_pnl||0)>=0?"var(--green)":"var(--red)";
+  const od=a.overdue||0;
+  const odPnl=a.overdue_pnl||0;
+  const odPnlColor=odPnl>=0?"var(--green)":"var(--red)";
   el.innerHTML=`
     <div class="stat-card"><div class="stat-card-lbl">Total Trades</div><div class="stat-card-val">${a.total||0}</div></div>
-    <div class="stat-card green"><div class="stat-card-lbl">Win Rate</div><div class="stat-card-val" style="color:var(--green)">${a.win_rate||0}%</div></div>
+    <div class="stat-card green"><div class="stat-card-lbl">Win Rate</div><div class="stat-card-val" style="color:var(--green)">${a.win_rate||0}%</div><div class="stat-card-sub" style="font-size:10px;color:var(--muted);margin-top:4px">vs T1/SL only</div></div>
     <div class="stat-card green"><div class="stat-card-lbl">Targets Hit</div><div class="stat-card-val" style="color:var(--green)">${a.wins||0}</div></div>
     <div class="stat-card red"><div class="stat-card-lbl">SL Hit</div><div class="stat-card-val" style="color:var(--red)">${a.losses||0}</div></div>
+    <div class="stat-card bw"><div class="stat-card-lbl">Overdue closed</div><div class="stat-card-val" style="color:var(--amber)">${od}</div><div class="stat-card-sub" style="font-size:10px;color:${odPnlColor};margin-top:4px;font-weight:600">${od?((odPnl>=0?"+":"")+odPnl.toFixed(0)+" P&amp;L"):"—"}</div></div>
     <div class="stat-card"><div class="stat-card-lbl">Avg P&L %</div><div class="stat-card-val" style="color:${pnlColor}">${a.avg_pnl_pct||0}%</div></div>
     <div class="stat-card"><div class="stat-card-lbl">Avg Days Held</div><div class="stat-card-val">${a.avg_days_held||0}</div></div>
   `;
@@ -1575,7 +1581,8 @@ function statusBadge(status){
   if(status==="open")return`<span class="badge sb-open">Open</span>`;
   if(status==="target_hit")return`<span class="badge sb-target">Target Hit</span>`;
   if(status==="sl_hit")return`<span class="badge sb-sl">SL Hit</span>`;
-  return`<span class="badge sb-open">${status}</span>`;
+  if(status==="overdue")return`<span class="badge sb-overdue">Overdue</span>`;
+  return`<span class="badge sb-open">${escapeHtml(status||"-")}</span>`;
 }
 function round2(x){return Math.round(x*100)/100;}
 function money(v){return Number(v||0).toLocaleString("en-IN",{maximumFractionDigits:2});}

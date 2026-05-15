@@ -2178,9 +2178,12 @@ def get_closed_trades():
 
         wins = len([t for t in trades if t.get("status") == "target_hit"])
         losses = len([t for t in trades if t.get("status") == "sl_hit"])
+        overdue_ct = len([t for t in trades if t.get("status") == "overdue"])
         total = len(trades)
-        win_rate = round((wins / total * 100), 1) if total else 0.0
+        decided = wins + losses
+        win_rate = round((wins / decided * 100), 1) if decided else 0.0
         total_pnl = sum(_to_float(t.get("pnl")) for t in trades)
+        overdue_pnl = sum(_to_float(t.get("pnl")) for t in trades if t.get("status") == "overdue")
         avg_pnl_pct = round(sum(_to_float(t.get("pnl_pct")) for t in trades) / total, 2) if total else 0.0
         avg_days = round(sum(_to_float(t.get("days_held")) for t in trades) / total, 1) if total else 0.0
 
@@ -2191,6 +2194,8 @@ def get_closed_trades():
                 "total": total,
                 "wins": wins,
                 "losses": losses,
+                "overdue": overdue_ct,
+                "overdue_pnl": round(overdue_pnl, 2),
                 "win_rate": win_rate,
                 "total_pnl": round(total_pnl, 2),
                 "avg_pnl_pct": avg_pnl_pct,
@@ -2214,8 +2219,10 @@ def portfolio_summary():
 
         wins = len([t for t in closed if t.get("status") == "target_hit"])
         losses = len([t for t in closed if t.get("status") == "sl_hit"])
+        overdue_ct = len([t for t in closed if t.get("status") == "overdue"])
         closed_count = len(closed)
-        win_rate = round((wins / closed_count * 100), 1) if closed_count else 0.0
+        decided = wins + losses
+        win_rate = round((wins / decided * 100), 1) if decided else 0.0
         total_pnl = sum(_to_float(t.get("pnl")) for t in closed)
 
         return jsonify({
@@ -2225,6 +2232,7 @@ def portfolio_summary():
                 "closed_positions": closed_count,
                 "wins": wins,
                 "losses": losses,
+                "overdue": overdue_ct,
                 "win_rate": win_rate,
                 "total_pnl": round(total_pnl, 2),
             },
@@ -2254,14 +2262,32 @@ def _to_naive_date(ts_str):
     return ts.normalize()
 
 
+# Max calendar days from added_date before a swing is "overdue" (matches active-trades UI countdown).
+SWING_MAX_HOLD_CALENDAR_DAYS = 14
+
+
+def _calendar_hold_days_since_added(trade, today_norm):
+    """Whole calendar days between trade added_date and today (date-only)."""
+    added = trade.get("added_date")
+    if not added:
+        return 0
+    try:
+        entry_d = pd.Timestamp(str(added)).date()
+        return (today_norm.date() - entry_d).days
+    except Exception:
+        return 0
+
+
 def run_trade_outcome_check():
     """Check each active trade individually for T1/SL hits over its active period.
 
-    Two-pass strategy:
+    Three-pass strategy:
       Pass 1: Historical OHLC (added_date → yesterday via yfinance)
       Pass 2: Live intraday LTP (today's day_high/day_low)
+      Pass 3: Max-hold overdue — calendar days since added_date > 14 with no resolution;
+              close at mark-to-market (last LTP / yfinance close), status ``overdue``.
 
-    When a hit is detected:
+    When a hit is detected (or overdue in Pass 3):
       - INSERT the trade into closed_trades with P&L calculated
       - DELETE the trade from active_trades
 
@@ -2464,6 +2490,58 @@ def run_trade_outcome_check():
             except Exception:
                 continue
 
+    # Pass 3: Overdue — no T1/SL hit within max calendar hold; close at mark-to-market (LTP).
+    still_open = [t for t in open_trades if t.get("id") not in updates_by_id]
+    overdue_trades = [
+        t for t in still_open
+        if _calendar_hold_days_since_added(t, today) > SWING_MAX_HOLD_CALENDAR_DAYS
+    ]
+    if overdue_trades:
+        syms_od = sorted({t.get("symbol") for t in overdue_trades if t.get("symbol")})
+        try:
+            od_prices, _ = _fetch_ltp_batch(syms_od)
+        except Exception:
+            od_prices = {}
+        for trade in overdue_trades:
+            try:
+                tid = trade.get("id")
+                sym = trade.get("symbol")
+                if not tid or not sym:
+                    continue
+                entry = float(trade.get("entry_price") or 0)
+                if entry <= 0:
+                    continue
+                q = od_prices.get(sym) or {}
+                exit_px = float(q.get("ltp") or 0)
+                if exit_px <= 0 and YF_OK:
+                    try:
+                        h = yf.Ticker(f"{sym}.NS").history(
+                            period="5d", interval="1d", auto_adjust=True)
+                        if h is not None and not h.empty:
+                            exit_px = float(h["Close"].dropna().iloc[-1])
+                    except Exception:
+                        exit_px = 0.0
+                if exit_px <= 0:
+                    continue
+                entry_day = pd.Timestamp(str(trade.get("added_date"))).normalize()
+                days_held = max((today.date() - entry_day.date()).days + 1, 1)
+                pnl = round(exit_px - entry, 2)
+                pnl_pct = round((pnl / entry) * 100, 2) if entry > 0 else 0.0
+                base_r = (trade.get("reason") or "").strip()
+                sfx = "Closed overdue: max hold exceeded (mark-to-market at last price)."
+                reason = f"{base_r} | {sfx}" if base_r else sfx
+                updates_by_id[tid] = {
+                    "trade": trade,
+                    "status": "overdue",
+                    "outcome_date": today.date().isoformat(),
+                    "days_held": days_held,
+                    "pnl": pnl,
+                    "pnl_pct": pnl_pct,
+                    "reason_override": reason,
+                }
+            except Exception as e:
+                print(f"[overdue] {trade.get('symbol', '?')}: {e}")
+
     # Move resolved trades: INSERT into closed_trades, DELETE from active_trades
     details = []
     for tid, upd in updates_by_id.items():
@@ -2484,7 +2562,7 @@ def run_trade_outcome_check():
             "pnl_pct":          upd["pnl_pct"],
             "outcome_date":     upd["outcome_date"],
             "days_held":        upd["days_held"],
-            "reason":           trade.get("reason"),
+            "reason":           upd.get("reason_override", trade.get("reason")),
         }
         try:
             _sb.table("closed_trades").insert([closed_row]).execute()
