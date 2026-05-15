@@ -902,7 +902,7 @@ async function checkProxy(){
   banner.className="proxy-banner proxy-check";
   msg.textContent="Checking backend...";
   try{
-    const r=await fetch(`${PROXY}/health`,{signal:abortTimeout(4000)});
+    const r=await fetch(`${PROXY}/ping`,{signal:abortTimeout(4000)});
     const d=await r.json();
     proxyOk=true;
     banner.className="proxy-banner proxy-ok";

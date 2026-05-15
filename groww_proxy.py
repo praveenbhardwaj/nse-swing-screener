@@ -1956,7 +1956,10 @@ def _fetch_ltp_batch(symbols):
 # ══════════════════════════════════════════════════════════════════════
 
 @app.route("/health")
+@app.route("/ping")
 def health():
+    # /ping mirrors /health — some browsers/extensions block URLs containing "health"
+    # (Netlify UI uses /ping for the live check so the banner stays accurate).
     return jsonify({"status": "ok", "yf_available": YF_OK, "time": time.time(),
                     "session_creds_active": bool(_session_api_key),
                     "supabase_ok": SB_OK, "build": "v5-regime-adaptive"})
