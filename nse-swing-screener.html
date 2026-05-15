@@ -901,13 +901,28 @@ async function checkProxy(){
   const msg=document.getElementById("proxyMsg");
   banner.className="proxy-banner proxy-check";
   msg.textContent="Checking backend...";
-  try{
-    const r=await fetch(`${PROXY}/ping`,{signal:abortTimeout(4000)});
-    const d=await r.json();
+  // Try /ping first (avoids some ad-blockers that target "health"). Older backends
+  // only have /health → 404 on /ping. If both checks fail, /market-data proves the API is up.
+  const probes=[
+    ["/ping",4000],
+    ["/health",4000],
+    ["/market-data",12000],
+  ];
+  let d=null;
+  for(const [path,ms] of probes){
+    try{
+      const r=await fetch(`${PROXY}${path}`,{signal:abortTimeout(ms)});
+      if(!r.ok) continue;
+      d=await r.json();
+      break;
+    }catch(_){/* next probe */}
+  }
+  if(d!==null){
     proxyOk=true;
     banner.className="proxy-banner proxy-ok";
-    msg.textContent=`Backend online${d.supabase_ok?" - DB connected":" - DB not configured"}`;
-  }catch(e){
+    const dbNote=typeof d.supabase_ok==="boolean"?(d.supabase_ok?" - DB connected":" - DB not configured"):"";
+    msg.textContent=`Backend online${dbNote}`;
+  }else{
     proxyOk=false;
     banner.className="proxy-banner proxy-fail";
     msg.textContent="Backend offline - run: python groww_proxy.py";
