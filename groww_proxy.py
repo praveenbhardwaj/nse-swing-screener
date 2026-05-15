@@ -1623,22 +1623,13 @@ def analyze_stock(sym_info, df, params, context):
         return rej(f"Score {score} < min {min_score}")
 
     # ── SIGNAL CLASSIFICATION ─────────────────────────────────────
-    # STRONG BUY requires ALL of: high score, bullish MACD, price above EMA20,
-    # strong volume, positive RS, and (in BEAR/CRISIS) higher lows pattern.
+    # STRONG BUY: elite — strict EMA stack, bullish MACD, strong volume, RS ok.
+    # BUY: score + MACD + price vs EMA20; any Step-4 MA path (ma_ok) is enough — not
+    #       only "EMA20 > EMA50" (cond_a), or many valid setups stay stuck as WATCH.
     # CRISIS regime disables STRONG BUY entirely (strong_buy_score=999).
     breadth_ok = context.get("breadth", {}).get("breadth_ok", True)
 
-    # ── QUALITY FILTERS (based on backtest: 1W loss-pattern analysis) ──
-    # Filter 1: Detect generic "Market reversal" risk (no specific risk identified)
-    #   — 75% loss rate in backtests; skip these for BUY/STRONG BUY signals
-    _fund = fundamentals or {}
-    _pe = _fund.get("pe"); _de = _fund.get("de")
-    has_specific_risk = ((_pe and _pe > 60) or (_de and _de > 2.0)
-                         or (atr_pct and atr_pct > 4) or pct_below_52 < 5)
-    # Filter 2: Require Price > EMA20 > EMA50 (short-term bullish alignment)
-    #   — trades with only "above 200 EMA" but not EMA20>EMA50 hit SL 100%
-    ema_stacked = ma_detail.get("a", False)
-    # Filter 3: Minimum score 75 for BUY (lower scores cluster in losses)
+    ema_stack_strict = ma_detail.get("a", False)  # price > EMA20 > EMA50
     quality_buy_score = max(75, rcfg["buy_score"])
 
     if (rcfg["allow_strong_buy"]
@@ -1646,13 +1637,13 @@ def analyze_stock(sym_info, df, params, context):
             and macd_sig == "bullish" and ema_pos == "above"
             and last_vol_ratio >= rcfg["strong_buy_vol"]
             and rs_ok is not False
-            and ema_stacked and has_specific_risk
+            and ema_stack_strict
             and (regime not in (REGIME_BEAR, REGIME_CRISIS) or higher_lows_ok)):
         sig = "STRONG BUY"
     elif (score >= quality_buy_score
             and (macd_sig in ("bullish", "neutral") or macd_cross_5d)
             and ema_pos in ("above", "at")
-            and ema_stacked and has_specific_risk):
+            and ma_ok):
         sig = "BUY"
     else:
         sig = "WATCH"
