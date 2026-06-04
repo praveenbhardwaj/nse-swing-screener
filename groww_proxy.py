@@ -20,7 +20,7 @@ Run:  python groww_proxy.py
 Deps: pip install flask flask-cors requests yfinance pandas numpy
 """
 
-import csv, hashlib, io, os, time, requests, threading, uuid
+import csv, hashlib, io, json, os, time, requests, threading, uuid
 import numpy as np
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -985,28 +985,54 @@ _NIFTY_MIDCAP_FALLBACK = {
     "WELSPUNIND":"Textiles","YESBANK":"Banking","ZYDUSWELL":"Pharmaceutical",
 }
 
+def _load_json_universe():
+    """Load stock universe from bundled nse_universe.json file."""
+    try:
+        json_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nse_universe.json")
+        with open(json_path, "r") as f:
+            data = json.load(f)
+        stocks = {}
+        for s in data.get("stocks", []):
+            sym = s.get("symbol", "").strip()
+            if sym and sym not in stocks:
+                stocks[sym] = s
+        if stocks:
+            print(f"[Universe] Loaded {len(stocks)} stocks from nse_universe.json")
+        return stocks
+    except Exception as e:
+        print(f"[Universe] nse_universe.json load failed: {e}")
+        return {}
+
 def _build_fallback_universe(scope):
-    """Return a hardcoded stock universe when all live NSE data sources fail.
+    """Return a stock universe when all live NSE data sources fail.
 
-    Fallback coverage:
-      NIFTY 50  → 50 stocks (always included)
-      NIFTY 100 and larger → adds Next50 + Midcap (~200 stocks total)
-
-    This ensures the screener always has something to scan even when NSE
-    archives and the NSE API are unreachable (common on cloud platforms).
+    Priority:
+      1. nse_universe.json (bundled file with ~500 stocks)
+      2. Hardcoded dicts (~222 stocks, always works)
     """
+    # Try JSON file first
+    json_stocks = _load_json_universe()
+    if json_stocks:
+        if scope == "NIFTY 50":
+            # Filter to just Nifty 50 names
+            n50 = set(_NIFTY50_FALLBACK.keys())
+            filtered = {s: v for s, v in json_stocks.items() if s in n50}
+            if filtered:
+                return list(filtered.values())
+        return list(json_stocks.values())
+
+    # Old hardcoded fallback
     base = {s: {"symbol": s, "name": s, "sector": sec, "industry": sec}
             for s, sec in _NIFTY50_FALLBACK.items()}
     if scope in ("NIFTY 50",):
         return list(base.values())
-    # Expand for larger indices
     extra = {**_NIFTY_NEXT50_FALLBACK}
-    if scope in ("NIFTY 200", "NIFTY 500", "ALL", "NIFTY MIDCAP 150", "NIFTY SMALLCAP 250"):
+    if scope in ("NIFTY 200", "NIFTY 500", "ALL", "ALL NSE", "NIFTY MIDCAP 150", "NIFTY SMALLCAP 250"):
         extra.update(_NIFTY_MIDCAP_FALLBACK)
     merged = {**base}
     merged.update({s: {"symbol": s, "name": s, "sector": sec, "industry": sec}
                    for s, sec in extra.items()})
-    print(f"[Universe] Using hardcoded fallback: {len(merged)} stocks for {scope}")
+    print(f"[Universe] Using old hardcoded fallback: {len(merged)} stocks for {scope}")
     return list(merged.values())
 
 UNIVERSE_INDICES = {
