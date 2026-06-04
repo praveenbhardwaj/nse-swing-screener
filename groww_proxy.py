@@ -885,6 +885,9 @@ NSE_CSV_URLS = {
     "NIFTY SMALLCAP 250":"https://archives.nseindia.com/content/indices/ind_niftysmallcap250list.csv",
 }
 
+# Full NSE equity listing — contains ALL ~2000+ listed stocks
+NSE_FULL_EQUITY_CSV = "https://archives.nseindia.com/content/equities/EQUITY_L.csv"
+
 # Alternative NSE CSV endpoints (some may work from cloud IPs)
 # Add your own GitHub repo URL here if you host the CSVs:
 # https://raw.githubusercontent.com/YOUR_USERNAME/nse-data/main/nifty500.csv
@@ -1012,6 +1015,7 @@ UNIVERSE_INDICES = {
     "NIFTY 200": ["NIFTY 200"],
     "NIFTY 500": ["NIFTY 500"],
     "ALL":       ["NIFTY 500", "NIFTY MIDCAP 150", "NIFTY SMALLCAP 250", "NIFTY NEXT 50"],
+    "ALL NSE":   [],  # special: uses EQUITY_L.csv for full market
 }
 
 SECTOR_YF = {
@@ -1098,6 +1102,69 @@ def _fetch_csv_url(url, label):
         print(f"[{label}] {e}")
     return {}
 
+def _parse_full_equity_csv(text):
+    """Parse NSE EQUITY_L.csv (SYMBOL, NAME OF COMPANY, SERIES, ...)."""
+    stocks = {}
+    try:
+        reader = csv.DictReader(io.StringIO(text))
+        for row in reader:
+            sym = (row.get("SYMBOL") or row.get(" SYMBOL") or "").strip()
+            series = (row.get("SERIES") or row.get(" SERIES") or "").strip()
+            if not sym or len(sym) > 20:
+                continue
+            # Only include EQ (equity) series — skip BE, BZ, etc.
+            if series and series not in ("EQ", "BE", "SM", "ST"):
+                continue
+            name = (row.get("NAME OF COMPANY") or row.get(" NAME OF COMPANY") or sym).strip()
+            stocks[sym] = {
+                "symbol": sym,
+                "name": name,
+                "sector": "Unknown",
+                "industry": "Unknown",
+            }
+    except Exception:
+        pass
+    return stocks
+
+def _fetch_full_equity_list():
+    """Fetch ALL NSE-listed equities from EQUITY_L.csv (~2000+ stocks)."""
+    try:
+        r = requests.get(NSE_FULL_EQUITY_CSV, timeout=20,
+                         headers={"User-Agent": NSE_HEADERS["User-Agent"],
+                                  "Accept": "text/csv,text/plain,*/*"})
+        if r.status_code == 200 and r.text.strip():
+            stocks = _parse_full_equity_csv(r.text)
+            if stocks:
+                print(f"[NSE-EQUITY_L] {len(stocks)} stocks from full equity list")
+                return stocks
+        print(f"[NSE-EQUITY_L] HTTP {r.status_code} or empty")
+    except Exception as e:
+        print(f"[NSE-EQUITY_L] {e}")
+    # Also try via NSE API endpoint for all equities
+    try:
+        session = _nse_session()
+        r = session.get("https://www.nseindia.com/api/equity-stockIndices",
+                        params={"index": "SECURITIES IN F&O"},
+                        headers=NSE_HEADERS, timeout=15)
+        if r.status_code == 200:
+            fno = {}
+            for item in r.json().get("data", []):
+                sym = item.get("symbol", "").strip()
+                if sym and len(sym) <= 20:
+                    meta = item.get("meta", {}) or {}
+                    fno[sym] = {
+                        "symbol": sym,
+                        "name": (meta.get("companyName") or sym).strip(),
+                        "sector": (meta.get("sector") or "Unknown").strip() or "Unknown",
+                        "industry": (meta.get("industry") or "").strip(),
+                    }
+            if fno:
+                print(f"[NSE-FnO] {len(fno)} stocks from F&O list")
+                return fno
+    except Exception as e:
+        print(f"[NSE-FnO] {e}")
+    return {}
+
 def _fetch_index_csv(index_name):
     """Try NSE archive CSV, then GitHub mirror."""
     # 1. NSE archives (blocked on many cloud IPs, worth a try)
@@ -1115,36 +1182,86 @@ def _fetch_index_csv(index_name):
     return {}
 
 def fetch_universe(scope="NIFTY 500"):
-    """Fetch the NSE stock universe for the given scope using a 3-layer fallback.
+    """Fetch the NSE stock universe for the given scope using a multi-layer fallback.
 
+    Layer 0: Full EQUITY_L.csv (ALL NSE scope — all ~2000+ listed stocks)
     Layer 1: NSE archive CSV (fast when accessible, often blocked on cloud IPs)
     Layer 2: NSE direct API (requires cookie session handshake)
-    Layer 3: Hardcoded dicts (always works, covers ~200 well-known stocks)
+    Layer 3: Multiple sectoral index queries via API (accumulates stocks)
+    Layer 4: Hardcoded dicts (always works, covers ~200 well-known stocks)
 
     Returns a list of stock dicts: [{symbol, name, sector, industry}, ...]
     Duplicate symbols across indices are deduplicated via the merged dict.
     """
     indices = UNIVERSE_INDICES.get(scope, ["NIFTY 500"])
     merged = {}
+
+    # --- Layer 0: For ALL/ALL NSE/NIFTY 500, try the full equity list first ---
+    if scope in ("ALL NSE", "ALL", "NIFTY 500"):
+        full = _fetch_full_equity_list()
+        if full:
+            merged.update(full)
+            if scope == "ALL NSE" or len(merged) >= 500:
+                # Got a large list — enrich with index data for sector info
+                for idx in indices:
+                    enrich = _fetch_index_csv(idx)
+                    if not enrich:
+                        session = _nse_session()
+                        enrich = _fetch_index(session, idx)
+                    if enrich:
+                        for sym, info in enrich.items():
+                            if sym in merged and merged[sym].get("sector") == "Unknown":
+                                merged[sym].update(info)
+                            elif sym not in merged:
+                                merged[sym] = info
+                result = list(merged.values())
+                print(f"[Universe] {scope}: {len(result)} stocks total")
+                return result
+
+    # --- Layer 1 & 2: Per-index CSV + API ---
     for idx in indices:
-        # Layer 1: CSV sources (NSE archive + optional GitHub mirror)
         data = _fetch_index_csv(idx)
         if data:
             merged.update(data)
             continue
-        # Layer 2: NSE API with cookie session (slower, needs browser-like headers)
         print(f"[Universe] CSV/GitHub failed for {idx}, trying NSE API…")
         session = _nse_session()
         api_data = _fetch_index(session, idx)
         if api_data:
             merged.update(api_data)
-            time.sleep(0.3)  # polite delay between NSE API calls
+            time.sleep(0.3)
             continue
-        # Layer 3: hardcoded fallback — guaranteed to always produce results
-        print(f"[Universe] NSE API also failed for {idx}, using hardcoded fallback")
+
+    # --- Layer 3: If we still have too few stocks, try sectoral indices via API ---
+    if len(merged) < 300 and scope in ("ALL NSE", "ALL", "NIFTY 500", "NIFTY 200"):
+        print(f"[Universe] Only {len(merged)} stocks so far, trying sectoral indices…")
+        sectoral_indices = [
+            "NIFTY BANK", "NIFTY IT", "NIFTY PHARMA", "NIFTY AUTO",
+            "NIFTY FMCG", "NIFTY METAL", "NIFTY ENERGY", "NIFTY REALTY",
+            "NIFTY INFRA", "NIFTY MEDIA", "NIFTY PSE", "NIFTY COMMODITIES",
+            "NIFTY CONSUMPTION", "NIFTY FIN SERVICE", "NIFTY HEALTHCARE INDEX",
+            "NIFTY CPSE", "NIFTY TOTAL MARKET",
+            "NIFTY MICROCAP 250", "NIFTY MIDSMALLCAP 400",
+            "NIFTY LARGEMIDCAP 250", "NIFTY500 MULTICAP 50:25:25",
+        ]
+        session = _nse_session()
+        for sidx in sectoral_indices:
+            try:
+                sdata = _fetch_index(session, sidx)
+                if sdata:
+                    merged.update(sdata)
+                    time.sleep(0.2)
+            except Exception:
+                pass
+        if len(merged) > 300:
+            print(f"[Universe] Sectoral enrichment → {len(merged)} stocks")
+
+    # --- Layer 4: Hardcoded fallback ---
+    if not merged:
+        print(f"[Universe] All live sources failed for {scope}, using hardcoded fallback")
         for stock in _build_fallback_universe(scope):
             merged[stock["symbol"]] = stock
-        break   # fallback covers the entire scope, no need to process remaining indices
+
     result = list(merged.values())
     print(f"[Universe] {scope}: {len(result)} stocks total")
     return result
