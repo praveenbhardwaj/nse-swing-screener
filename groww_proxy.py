@@ -11,7 +11,7 @@ Key capabilities:
   - Async parallel screening with live progress streaming
   - Trade outcome reconciliation (historical OHLC + intraday LTP)
   - Portfolio management (positions, recommendations, event audit log)
-  - Dual price source: Groww API (primary) → yfinance (fallback)
+  - Dual price source: Dhan API (primary) → yfinance (fallback)
   - Supabase (PostgreSQL) for persistent trade/portfolio storage
 
 Capital model: ₹20,000 per trade | ~1-week hold | ~5% target | ~3.5% SL
@@ -20,12 +20,34 @@ Run:  python groww_proxy.py
 Deps: pip install flask flask-cors requests yfinance pandas numpy
 """
 
-import csv, hashlib, io, json, os, time, requests, threading, uuid
+import csv, io, json, os, time, requests, threading, uuid
+from pathlib import Path
 import numpy as np
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+
+
+def _load_local_env():
+    """Load local .env values without overriding deployed environment variables."""
+    env_path = Path(__file__).with_name(".env")
+    if not env_path.exists():
+        return
+
+    for raw_line in env_path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip("\"'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+_load_local_env()
 
 try:
     import yfinance as yf
@@ -127,153 +149,114 @@ except Exception as _sb_err:
     print(f"[Supabase] Not configured — {_sb_err}")
 
 # ══════════════════════════════════════════════════════════════════════
-# GROWW API AUTH
+# DHAN API AUTH + INSTRUMENT MAP
 # ══════════════════════════════════════════════════════════════════════
-# Groww uses a SHA-256 checksum scheme:
-#   checksum = SHA256(api_secret + unix_timestamp_string)
-#   POST /v1/token/api/access → returns bearer access_token (~4h TTL)
-#
-# Credentials priority (highest → lowest):
-#   1. Session-level override via POST /set-credentials (stored in _session_*)
-#   2. Environment variables GROWW_API_KEY / GROWW_API_SECRET (if set, override hardcoded)
-#   3. Hardcoded defaults below (used when env vars are empty)
-#
-# If none of the above yield a key+secret, live price falls back to yfinance.
-# WARNING: Hardcoded secrets in source are exposed to anyone with repo/server access.
-# Prefer env vars on shared hosts; rotate keys if this file was ever leaked.
-# ══════════════════════════════════════════════════════════════════════
-
-_HARDCODED_GROWW_API_KEY = (
-    "eyJraWQiOiJaTUtjVXciLCJhbGciOiJFUzI1NiJ9.eyJleHAiOjI1NjcyMTc5NTQsImlhdCI6MTc3ODgxNzk1NCwibmJmIjoxNzc4ODE3OTU0LCJzdWIiOiJ7XCJ0b2tlblJlZklkXCI6XCI2ZmQ2MjU3Ny00ZjRmLTQ2ODEtOWJjYy0yYjM1NTllODMwZWRcIixcInZlbmRvckludGVncmF0aW9uS2V5XCI6XCJlMzFmZjIzYjA4NmI0MDZjODg3NGIyZjZkODQ5NTMxM1wiLFwidXNlckFjY291bnRJZFwiOlwiMGFlMDJiYmMtMjdhOS00OGQ3LWFjNWUtZjkxODA0ZTlhMDc1XCIsXCJkZXZpY2VJZFwiOlwiNGUxZDI1OWItODNmMi01NzAyLTg3ZDMtZDE5MTExYjJmY2FmXCIsXCJzZXNzaW9uSWRcIjpcImY4YTU4YTY2LTAzNTUtNGUzMS1iYjY1LWIzODA2YmE1MzMxNFwiLFwiYWRkaXRpb25hbERhdGFcIjpcIno1NC9NZzltdjE2WXdmb0gvS0EwYklUT2hnRmFrdHd6V21OL0FPUDFwdkJSTkczdTlLa2pWZDNoWjU1ZStNZERhWXBOVi9UOUxIRmtQejFFQisybTdRPT1cIixcInJvbGVcIjpcImF1dGgtdG90cFwiLFwic291cmNlSXBBZGRyZXNzXCI6XCIyNDAxOjQ5MDA6MWYzOTozNjJlOmYwMmY6OGY4ZDoxNWMwOmMzM2UsMTcyLjY4LjM5LjE5NCwzNS4yNDEuMjMuMTIzXCIsXCJ0d29GYUV4cGlyeVRzXCI6MjU2NzIxNzk1NDc2NyxcInZlbmRvck5hbWVcIjpcImdyb3d3QXBpXCJ9IiwiaXNzIjoiYXBleC1hdXRoLXByb2QtYXBwIn0.G-EWpvSVNsF3XkZbhjELWlyNxnqIy8prSdVQYHDheHbFkjq0MZszeQW1vGNjrEZmZuvwlgBVtt5l_R3mYs678Q"
-)
-_HARDCODED_GROWW_API_SECRET = "GMBSEFQ&RpuYD#ba0su!DMW3554GZ%Iu"
-
-API_KEY    = os.environ.get("GROWW_API_KEY", "").strip() or _HARDCODED_GROWW_API_KEY.strip()
-API_SECRET = os.environ.get("GROWW_API_SECRET", "").strip() or _HARDCODED_GROWW_API_SECRET.strip()
-BASE_URL   = "https://api.groww.in/v1"
+DHAN_CLIENT_ID    = os.environ.get("DHAN_CLIENT_ID", "").strip()
+DHAN_ACCESS_TOKEN = os.environ.get("DHAN_ACCESS_TOKEN", "").strip()
+DHAN_BASE_URL     = "https://api.dhan.co/v2"
+DHAN_MASTER_URL   = "https://images.dhan.co/api-data/api-scrip-master-detailed.csv"
 
 app = Flask(__name__)
 CORS(app)  # Allow cross-origin requests from the Netlify-hosted frontend
 
-# Thread-safe token cache. Token is reused for 4 hours (14400 seconds).
-_access_token = None; _token_fetched_at = 0
 # Session-level credential override (set via POST /set-credentials)
-_session_api_key = None; _session_api_secret = None
-_cred_lock = threading.Lock()  # Protects _session_* and token cache
+_session_client_id = None; _session_access_token = None
+_cred_lock = threading.Lock()
+_dhan_symbol_map = None; _dhan_symbol_map_ts = 0
+_dhan_map_lock = threading.Lock()
 
-def generate_checksum(secret, timestamp):
-    """Create SHA-256 authentication signature: SHA256(secret + timestamp)."""
-    return hashlib.sha256((secret + timestamp).encode()).hexdigest()
-
-
-def _extract_access_token_from_token_response(body):
-    """Parse access token from POST /token/api/access JSON (shape varies by API version)."""
-    if not isinstance(body, dict):
-        return None
-    for key in ("token", "access_token", "accessToken"):
-        val = body.get(key)
-        if isinstance(val, str) and val.strip():
-            return val.strip()
-    inner = body.get("payload")
-    if isinstance(inner, dict):
-        for key in ("token", "access_token", "accessToken"):
-            val = inner.get(key)
-            if isinstance(val, str) and val.strip():
-                return val.strip()
-    return None
-
-
-def _token_error_details(resp):
-    """Extract structured error info from a failed Groww token response."""
-    try:
-        payload = resp.json()
-    except Exception:
-        payload = {"raw": (resp.text or "")[:400]}
-    return {
-        "status_code": resp.status_code,
-        "payload": payload,
-    }
-
-
-def _request_access_token(key, secret):
-    """Attempt to obtain a Groww access token.
-
-    The Groww token endpoint has been observed to accept different request body
-    formats across SDK versions. We try three formats in sequence and return the
-    first that succeeds. Returns (token_str, None) on success or (None, error_dict).
-    """
-    if not key or not secret:
-        return None, {"message": "Missing API key/secret"}
-    ts = str(int(time.time()))
-    checksum = generate_checksum(secret, ts)
-    # Try multiple body formats — Groww API is inconsistent across SDK versions
-    bodies = [
-        {"key_type": "approval", "checksum": checksum, "timestamp": ts},
-        {"checksum": checksum, "timestamp": ts},
-        {"keyType": "approval", "checksum": checksum, "timestamp": ts},
-    ]
-    attempt_errors = []
-    for body in bodies:
-        try:
-            resp = requests.post(
-                f"{BASE_URL}/token/api/access",
-                headers={
-                    "Authorization": f"Bearer {key}",
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                },
-                json=body,
-                timeout=10)
-        except Exception as e:
-            attempt_errors.append({"request_body": body, "error": str(e)})
-            continue
-        details = _token_error_details(resp)
-        if resp.status_code == 429:
-            # Rate limited — surface the Retry-After header to the caller
-            retry_after = resp.headers.get("Retry-After")
-            details["message"] = "Groww rate limit reached. Please wait and retry."
-            if retry_after:
-                details["retry_after_seconds"] = retry_after
-            details["request_body"] = body
-            return None, details
-        token = _extract_access_token_from_token_response(details.get("payload") or {})
-        if token:
-            return token, None
-        details["request_body"] = body
-        attempt_errors.append(details)
-    return None, {
-        "message": "Groww token endpoint rejected credentials",
-        "attempts": attempt_errors[:3],
-    }
-
-
-def get_access_token(force=False):
-    """Return a valid Groww access token, refreshing if expired or forced.
-
-    Token is cached for 4 hours (14400 seconds). Thread-safe credential read.
-    Returns None if credentials are missing or Groww rejects them.
-    """
-    global _access_token, _token_fetched_at
-    # Use cached token if fresh and not force-refreshing
-    if _access_token and not force and (time.time() - _token_fetched_at) < 14400:
-        return _access_token
+def get_dhan_credentials():
+    """Return active Dhan credentials from session override or environment."""
     with _cred_lock:
-        # Session override takes priority over environment variables
-        key = _session_api_key or API_KEY
-        secret = _session_api_secret or API_SECRET
-    tok, err = _request_access_token(key, secret)
-    if tok:
-        _access_token, _token_fetched_at = tok, time.time()
-        print("[Auth] Token refreshed OK")
-        return _access_token
-    print(f"[Auth] Token fetch failed: {err}")
-    return None
+        client_id = _session_client_id or DHAN_CLIENT_ID
+        access_token = _session_access_token or DHAN_ACCESS_TOKEN
+    return client_id, access_token
 
 
-def groww_headers():
-    """Build Groww API request headers with current bearer token."""
-    return {"Authorization": f"Bearer {get_access_token()}",
-            "Accept": "application/json", "X-API-VERSION": "1.0"}
+def dhan_headers(client_id=None, access_token=None):
+    """Build Dhan REST request headers."""
+    client_id = client_id or get_dhan_credentials()[0]
+    access_token = access_token or get_dhan_credentials()[1]
+    return {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "client-id": client_id,
+        "access-token": access_token,
+    }
+
+
+def _first_present(row, names):
+    for name in names:
+        val = row.get(name)
+        if val is not None and str(val).strip():
+            return str(val).strip()
+    return ""
+
+
+def _load_dhan_symbol_map(force=False):
+    """Load Dhan NSE equity symbol -> security ID map from instrument master."""
+    global _dhan_symbol_map, _dhan_symbol_map_ts
+    if _dhan_symbol_map is not None and not force and (time.time() - _dhan_symbol_map_ts) < 86400:
+        return _dhan_symbol_map
+    with _dhan_map_lock:
+        if _dhan_symbol_map is not None and not force and (time.time() - _dhan_symbol_map_ts) < 86400:
+            return _dhan_symbol_map
+        mapping = {}
+        try:
+            resp = requests.get(DHAN_MASTER_URL, timeout=20)
+            resp.raise_for_status()
+            reader = csv.DictReader(io.StringIO(resp.text))
+            for row in reader:
+                exch = _first_present(row, ["EXCH_ID", "SEM_EXM_EXCH_ID"]).upper()
+                segment = _first_present(row, ["SEGMENT", "SEM_SEGMENT"]).upper()
+                instrument = _first_present(row, ["INSTRUMENT", "SEM_INSTRUMENT_NAME"]).upper()
+                series = _first_present(row, ["SERIES", "SEM_SERIES"]).upper()
+                if exch != "NSE" or segment not in ("E", "EQ", "EQUITY"):
+                    continue
+                if instrument and instrument not in ("EQUITY", "EQ"):
+                    continue
+                if series and series != "EQ":
+                    continue
+                security_id = _first_present(row, ["SECURITY_ID", "SEM_SMST_SECURITY_ID", "SMST_SECURITY_ID"])
+                symbols = [
+                    _first_present(row, ["TRADING_SYMBOL", "SEM_TRADING_SYMBOL"]),
+                    _first_present(row, ["SYMBOL_NAME", "SM_SYMBOL_NAME", "SEM_SYMBOL_NAME"]),
+                    _first_present(row, ["UNDERLYING_SYMBOL", "SEM_UNDERLYING_SYMBOL"]),
+                    _first_present(row, ["CUSTOM_SYMBOL", "SEM_CUSTOM_SYMBOL"]),
+                ]
+                for symbol in symbols:
+                    normalized = symbol.upper().replace("-EQ", "").strip()
+                    if normalized and security_id and normalized not in mapping:
+                        mapping[normalized] = security_id
+            _dhan_symbol_map = mapping
+            _dhan_symbol_map_ts = time.time()
+            print(f"[Dhan] Loaded {len(mapping)} NSE equity instruments")
+        except Exception as e:
+            print(f"[Dhan] Instrument master unavailable: {e}")
+            _dhan_symbol_map = _dhan_symbol_map or {}
+            _dhan_symbol_map_ts = time.time()
+    return _dhan_symbol_map
+
+
+def _validate_dhan_credentials(client_id, access_token):
+    """Validate Dhan credentials with a small LTP request."""
+    if not client_id or not access_token:
+        return False, {"message": "Missing Dhan client_id/access_token"}
+    try:
+        resp = requests.post(
+            f"{DHAN_BASE_URL}/marketfeed/ltp",
+            json={"NSE_EQ": [1333]},
+            headers=dhan_headers(client_id, access_token),
+            timeout=12)
+        try:
+            payload = resp.json()
+        except Exception:
+            payload = {"raw": (resp.text or "")[:400]}
+        if resp.ok and isinstance(payload, dict) and str(payload.get("status", "")).lower() == "success":
+            return True, None
+        return False, {"status_code": resp.status_code, "payload": payload}
+    except Exception as e:
+        return False, {"message": str(e)}
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1048,9 +1031,12 @@ UNIVERSE_INDICES = {
     "NIFTY 100": ["NIFTY 100"],
     "NIFTY 200": ["NIFTY 200"],
     "NIFTY 500": ["NIFTY 500"],
+    "NSE TOP 1000": [],
     "ALL":       ["NIFTY 500", "NIFTY MIDCAP 150", "NIFTY SMALLCAP 250", "NIFTY NEXT 50"],
     "ALL NSE":   [],  # special: uses EQUITY_L.csv for full market
 }
+
+SCAN_RESULT_LIMIT = 5
 
 SECTOR_YF = {
     "INFORMATION TECHNOLOGY": "^CNXIT", "IT": "^CNXIT",
@@ -1230,12 +1216,16 @@ def fetch_universe(scope="NIFTY 500"):
     indices = UNIVERSE_INDICES.get(scope, ["NIFTY 500"])
     merged = {}
 
-    # --- Layer 0: For ALL/ALL NSE/NIFTY 500, try the full equity list first ---
-    if scope in ("ALL NSE", "ALL", "NIFTY 500"):
+    # --- Layer 0: For broad NSE scopes, try the full equity list first ---
+    if scope in ("ALL NSE", "ALL", "NSE TOP 1000"):
         full = _fetch_full_equity_list()
         if full:
+            if scope == "NSE TOP 1000":
+                result = list(full.values())[:1000]
+                print(f"[Universe] {scope}: {len(result)} stocks total")
+                return result
             merged.update(full)
-            if scope == "ALL NSE" or len(merged) >= 500:
+            if scope == "ALL NSE" or scope == "ALL":
                 # Got a large list — enrich with index data for sector info
                 for idx in indices:
                     enrich = _fetch_index_csv(idx)
@@ -1267,7 +1257,7 @@ def fetch_universe(scope="NIFTY 500"):
             continue
 
     # --- Layer 3: If we still have too few stocks, try sectoral indices via API ---
-    if len(merged) < 300 and scope in ("ALL NSE", "ALL", "NIFTY 500", "NIFTY 200"):
+    if len(merged) < 300 and scope in ("ALL NSE", "ALL", "NSE TOP 1000", "NIFTY 500", "NIFTY 200"):
         print(f"[Universe] Only {len(merged)} stocks so far, trying sectoral indices…")
         sectoral_indices = [
             "NIFTY BANK", "NIFTY IT", "NIFTY PHARMA", "NIFTY AUTO",
@@ -2026,13 +2016,13 @@ def scan_worker(job_id, stocks, params):
                 elif res.get("rejected"): rejected.append(res)
                 else: passed.append(res)
                 job["progress"] = completed[0]
-                job["results"]  = sorted(passed, key=lambda x: x["score"], reverse=True)
+                job["results"]  = sorted(passed, key=lambda x: x["score"], reverse=True)[:SCAN_RESULT_LIMIT]
                 job["rejected"] = rejected
 
     job["status"]  = "done"
-    job["results"] = sorted(passed, key=lambda x: x["score"], reverse=True)
+    job["results"] = sorted(passed, key=lambda x: x["score"], reverse=True)[:SCAN_RESULT_LIMIT]
     job["rejected"] = rejected
-    print(f"[Scan {job_id}] Done — {len(passed)}/{len(stocks)} passed | regime={regime}")
+    print(f"[Scan {job_id}] Done — top {len(job['results'])} of {len(passed)} passed | regime={regime}")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -2071,13 +2061,7 @@ def fetch_market_data():
     return result
 
 def _fetch_ltp_batch(symbols):
-    """Fetch live price data for a batch of symbols using Groww API + yfinance fallback.
-
-    For each symbol, tries sources in order:
-      1. Groww API: returns last_price, day_high, day_low, day_change, change_pct
-         - HTTP 429 from Groww circuit-breaks the entire batch to yfinance
-         - Auth errors (401/403) also disable Groww for remaining symbols
-      2. yfinance: uses 5-day daily history; Close as LTP, candle H/L as day range
+    """Fetch live price data using Dhan marketfeed + yfinance fallback.
 
     Returns:
         prices: dict[symbol] = {ltp, day_high, day_low, change, change_pct, source}
@@ -2086,56 +2070,63 @@ def _fetch_ltp_batch(symbols):
     if not symbols:
         return {}, []
     prices, failed = {}, []
-    groww_available = True
-    token = get_access_token()
-    if not token:
-        groww_available = False  # skip Groww entirely if no token
-    for sym in symbols:
-        got = False
-        if groww_available:
+    normalized_symbols = [str(s).strip().upper() for s in symbols if str(s).strip()]
+
+    client_id, access_token = get_dhan_credentials()
+    if client_id and access_token:
+        symbol_map = _load_dhan_symbol_map()
+        sid_to_symbol = {}
+        security_ids = []
+        for sym in normalized_symbols:
+            sid = symbol_map.get(sym)
+            if sid:
+                sid_to_symbol[str(sid)] = sym
+                try:
+                    security_ids.append(int(sid))
+                except Exception:
+                    security_ids.append(sid)
+        if security_ids:
             try:
-                r = requests.get(
-                    f"{BASE_URL}/live-data/quote",
-                    params={"exchange": "NSE", "segment": "CASH", "trading_symbol": sym},
-                    headers={
-                        "Authorization": f"Bearer {token}",
-                        "Accept": "application/json",
-                        "X-API-VERSION": "1.0",
-                    },
-                    timeout=5,
-                )
-                d = r.json()
-                if r.status_code == 429:
-                    # Circuit break Groww for remaining symbols in this batch.
-                    groww_available = False
-                elif d.get("status") == "SUCCESS":
-                    p = d["payload"]
-                    ohlc = p.get("ohlc") if isinstance(p.get("ohlc"), dict) else {}
-                    ltp_raw = p.get("last_price")
-                    if ltp_raw is None:
-                        ltp_raw = p.get("ltp")
-                    if ltp_raw is None and ohlc:
-                        ltp_raw = ohlc.get("close")
-                    if ltp_raw is not None:
+                resp = requests.post(
+                    f"{DHAN_BASE_URL}/marketfeed/ohlc",
+                    json={"NSE_EQ": security_ids[:1000]},
+                    headers=dhan_headers(client_id, access_token),
+                    timeout=12)
+                payload = resp.json()
+                if resp.ok and str(payload.get("status", "")).lower() == "success":
+                    data = (payload.get("data") or {}).get("NSE_EQ") or {}
+                    for sid, packet in data.items():
+                        sym = sid_to_symbol.get(str(sid))
+                        if not sym or not isinstance(packet, dict):
+                            continue
+                        ltp_raw = packet.get("last_price")
+                        ohlc = packet.get("ohlc") if isinstance(packet.get("ohlc"), dict) else {}
+                        if ltp_raw is None:
+                            ltp_raw = ohlc.get("close")
+                        if ltp_raw is None:
+                            continue
                         ltp = float(ltp_raw)
-                        hi_raw = p.get("high_price") or p.get("day_high") or ohlc.get("high")
-                        lo_raw = p.get("low_price") or p.get("day_low") or ohlc.get("low")
+                        prev_close = float(ohlc.get("close") or ltp)
+                        chg = ltp - prev_close
+                        chg_pct = (chg / prev_close * 100) if prev_close else 0.0
                         prices[sym] = {
-                            "ltp": ltp,
-                            "day_high": float(hi_raw) if hi_raw is not None else ltp,
-                            "day_low": float(lo_raw) if lo_raw is not None else ltp,
-                            "change": round(p.get("day_change") or 0, 2),
-                            "change_pct": round(p.get("day_change_perc") or 0, 2),
-                            "source": "groww",
+                            "ltp": round(ltp, 2),
+                            "day_high": round(float(ohlc.get("high") or ltp), 2),
+                            "day_low": round(float(ohlc.get("low") or ltp), 2),
+                            "change": round(chg, 2),
+                            "change_pct": round(chg_pct, 2),
+                            "source": "dhan",
                         }
-                        got = True
-                else:
-                    err_code = str((d.get("error") or {}).get("code", ""))
-                    if err_code in ("401", "403", "429"):
-                        groww_available = False
-            except Exception:
-                pass
-        if not got and YF_OK:
+                elif resp.status_code in (401, 403):
+                    print("[Dhan] Credentials rejected by marketfeed")
+            except Exception as e:
+                print(f"[Dhan] marketfeed fallback to yfinance: {e}")
+
+    for sym in normalized_symbols:
+        if sym in prices:
+            continue
+        got = False
+        if YF_OK:
             try:
                 hist = yf.Ticker(f"{sym}.NS").history(period="5d", interval="1d", auto_adjust=True)
                 if hist is not None and not hist.empty:
@@ -2169,8 +2160,10 @@ def _fetch_ltp_batch(symbols):
 def health():
     # /ping mirrors /health — some browsers/extensions block URLs containing "health"
     # (Netlify UI uses /ping for the live check so the banner stays accurate).
+    client_id, access_token = get_dhan_credentials()
     return jsonify({"status": "ok", "yf_available": YF_OK, "time": time.time(),
-                    "session_creds_active": bool(_session_api_key),
+                    "session_creds_active": bool(_session_client_id),
+                    "dhan_configured": bool(client_id and access_token),
                     "supabase_ok": SB_OK, "build": "v5-regime-adaptive"})
 
 @app.route("/regime")
@@ -2191,24 +2184,10 @@ def get_ltp():
 
 @app.route("/quote/<symbol>")
 def get_quote(symbol):
-    token = get_access_token()
-    if token:
-        try:
-            r = requests.get(
-                f"{BASE_URL}/live-data/quote",
-                params={"exchange": "NSE", "segment": "CASH", "trading_symbol": symbol},
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Accept": "application/json",
-                    "X-API-VERSION": "1.0",
-                },
-                timeout=5,
-            )
-            d = r.json()
-            if d.get("status") == "SUCCESS":
-                return jsonify(d)
-        except Exception:
-            pass
+    prices, _ = _fetch_ltp_batch([symbol])
+    quote = prices.get(symbol.upper())
+    if quote:
+        return jsonify({"status": "SUCCESS", "payload": quote})
     if YF_OK:
         try:
             hist = yf.Ticker(f"{symbol}.NS").history(period="5d", interval="1d", auto_adjust=True)
@@ -2229,11 +2208,13 @@ def get_quote(symbol):
                 })
         except Exception as e:
             return jsonify({"error": f"Quote fallback failed: {e}"}), 500
-    return jsonify({"error": "Quote unavailable from Groww and yfinance"}), 503
+    return jsonify({"error": "Quote unavailable from Dhan and yfinance"}), 503
 
 @app.route("/refresh-token", methods=["POST"])
 def refresh_token():
-    return jsonify({"ok": bool(get_access_token(force=True))})
+    client_id, access_token = get_dhan_credentials()
+    ok, details = _validate_dhan_credentials(client_id, access_token)
+    return jsonify({"ok": ok, "details": details or {}})
 
 @app.route("/universe")
 def universe_route():
@@ -2290,26 +2271,24 @@ def market_data_route():
 
 @app.route("/set-credentials", methods=["POST"])
 def set_credentials():
-    global _session_api_key, _session_api_secret, _access_token, _token_fetched_at
-    data   = request.get_json(silent=True) or {}
-    key    = data.get("api_key", "").strip()
-    secret = data.get("api_secret", "").strip()
-    if not key or not secret:
-        return jsonify({"ok": False, "error": "api_key and api_secret required"}), 400
-    tok, err = _request_access_token(key, secret)
-    if tok:
+    global _session_client_id, _session_access_token
+    data = request.get_json(silent=True) or {}
+    client_id = (data.get("client_id") or data.get("api_key") or "").strip()
+    access_token = (data.get("access_token") or data.get("api_secret") or "").strip()
+    if not client_id or not access_token:
+        return jsonify({"ok": False, "error": "client_id and access_token required"}), 400
+    ok, details = _validate_dhan_credentials(client_id, access_token)
+    if ok:
         with _cred_lock:
-            _session_api_key = key
-            _session_api_secret = secret
-            _access_token = tok
-            _token_fetched_at = time.time()
+            _session_client_id = client_id
+            _session_access_token = access_token
         return jsonify({"ok": True})
     with _cred_lock:
-        _session_api_key = None; _session_api_secret = None
+        _session_client_id = None; _session_access_token = None
     return jsonify({
         "ok": False,
-        "error": "Groww rejected credentials",
-        "details": err or {},
+        "error": "Dhan rejected credentials",
+        "details": details or {},
     }), 401
 
 @app.route("/save-trades", methods=["POST"])
@@ -2804,8 +2783,8 @@ if __name__ == "__main__":
     print("  NSE Swing Screener — Adaptive Regime Engine v3")
     print("  Listening on http://localhost:5001")
     print("=" * 60)
-    tok = get_access_token()
-    print(f"  Groww Auth  : {'OK' if tok else 'FAILED'}")
+    client_id, access_token = get_dhan_credentials()
+    print(f"  Dhan Auth   : {'CONFIGURED' if client_id and access_token else 'Not configured'}")
     print(f"  yfinance    : {'OK' if YF_OK else 'MISSING'}")
     print(f"  Supabase    : {'OK' if SB_OK else 'Not configured'}")
     print("=" * 60)

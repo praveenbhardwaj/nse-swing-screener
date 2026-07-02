@@ -535,15 +535,15 @@ details>summary::-webkit-details-marker{display:none}
 <!-- CREDENTIAL MODAL -->
 <div class="modal-overlay" id="credModal" style="display:none">
   <div class="modal-box">
-    <div class="modal-ttl">Connect to Groww</div>
-    <div class="modal-sub">Enter your Groww API credentials to enable live screening.</div>
-    <label class="modal-lbl" for="credKey">API Key (JWT)</label>
-    <input class="modal-inp" type="text" id="credKey" placeholder="eyJra..." autocomplete="off">
-    <label class="modal-lbl" for="credSecret">API Secret</label>
-    <input class="modal-inp" type="password" id="credSecret" placeholder="your-secret" autocomplete="off">
+    <div class="modal-ttl">Connect to Dhan</div>
+    <div class="modal-sub">Enter your Dhan client ID and access token to enable live screening.</div>
+    <label class="modal-lbl" for="credKey">Dhan Client ID</label>
+    <input class="modal-inp" type="text" id="credKey" placeholder="1000000001" autocomplete="off">
+    <label class="modal-lbl" for="credSecret">Dhan Access Token</label>
+    <input class="modal-inp" type="password" id="credSecret" placeholder="access-token" autocomplete="off">
     <div class="modal-err" id="credErr"></div>
-    <button class="btn btn-p" id="credSubmitBtn" onclick="submitCredentials()" style="width:100%">Connect to Groww</button>
-    <button class="btn btn-g" onclick="skipGrowwAndContinue()" style="width:100%;margin-top:8px">Use Yahoo fallback</button>
+    <button class="btn btn-p" id="credSubmitBtn" onclick="submitCredentials()" style="width:100%">Connect to Dhan</button>
+    <button class="btn btn-g" onclick="skipDhanAndContinue()" style="width:100%;margin-top:8px">Use Yahoo fallback</button>
     <div class="modal-note">Credentials stored in sessionStorage only - cleared when you close the tab.</div>
   </div>
 </div>
@@ -653,6 +653,7 @@ details>summary::-webkit-details-marker{display:none}
         <option value="NIFTY 100">Universe: Nifty 100</option>
         <option value="NIFTY 200">Universe: Nifty 200</option>
         <option value="NIFTY 500" selected>Universe: Nifty 500</option>
+        <option value="NSE TOP 1000">Universe: NSE Top 1000</option>
         <option value="ALL">Universe: All (Nifty + Mid + Small)</option>
         <option value="ALL NSE">Universe: Full NSE (~2000+)</option>
       </select>
@@ -875,8 +876,8 @@ window.addEventListener("load",async()=>{
   fetchMarketData();
   loadUniverse();
   loadActiveTrades();
-  if(!sessionStorage.getItem("groww_creds_set")){
-    showToast("Groww not connected. Running with Yahoo fallback.","info");
+  if(!sessionStorage.getItem("dhan_creds_set")){
+    showToast("Dhan not connected. Running with Yahoo fallback.","info");
   }
   document.addEventListener("visibilitychange",()=>{
     if(document.hidden)stopActivePnlAutoRefresh();
@@ -1275,7 +1276,7 @@ function clearAll(){
 // ── CREDENTIAL MODAL ──────────────────────────────────────────
 function showCredentialModal(){document.getElementById("credModal").style.display="flex";document.getElementById("credErr").textContent="";}
 function hideCredentialModal(){document.getElementById("credModal").style.display="none";}
-function skipGrowwAndContinue(){sessionStorage.removeItem("groww_creds_set");hideCredentialModal();showToast("Using Yahoo fallback for live prices.","info");}
+function skipDhanAndContinue(){sessionStorage.removeItem("dhan_creds_set");hideCredentialModal();showToast("Using Yahoo fallback for live prices.","info");}
 async function submitCredentials(){
   const key=document.getElementById("credKey").value.trim();
   const secret=document.getElementById("credSecret").value.trim();
@@ -1284,15 +1285,15 @@ async function submitCredentials(){
   if(!key||!secret){errEl.textContent="Both fields are required.";return;}
   btn.disabled=true;btn.textContent="Connecting...";errEl.textContent="";
   try{
-    const r=await fetch(`${PROXY}/set-credentials`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({api_key:key,api_secret:secret})});
+    const r=await fetch(`${PROXY}/set-credentials`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({client_id:key,access_token:secret})});
     const d=await r.json();
-    if(d.ok){sessionStorage.setItem("groww_creds_set","1");hideCredentialModal();await checkProxy();fetchMarketData();loadUniverse();}
+    if(d.ok){sessionStorage.setItem("dhan_creds_set","1");hideCredentialModal();await checkProxy();fetchMarketData();loadUniverse();}
     else{
-      const apiMsg=d?.details?.payload?.errorMessage?.message||d?.details?.payload?.error?.message||d?.error||"Groww rejected the credentials.";
+      const apiMsg=d?.details?.payload?.errorMessage?.message||d?.details?.payload?.error?.message||d?.error||"Dhan rejected the credentials.";
       errEl.textContent=apiMsg;
     }
   }catch(e){errEl.textContent="Network error - is the backend running?";}
-  finally{btn.disabled=false;btn.textContent="Connect to Groww";}
+  finally{btn.disabled=false;btn.textContent="Connect to Dhan";}
 }
 
 // ── TABS ──────────────────────────────────────────────────────

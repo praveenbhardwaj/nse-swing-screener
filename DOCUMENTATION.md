@@ -1,7 +1,7 @@
 # NSE Swing Screener — End-to-End Documentation
 
 > **Version:** v3 (Adaptive Market Regime Engine)
-> **Stack:** Python/Flask · Supabase · yfinance · Groww API · Vanilla JS SPA
+> **Stack:** Python/Flask · Supabase · yfinance · Dhan API · Vanilla JS SPA
 
 ---
 
@@ -49,7 +49,7 @@ Flask Backend (groww_proxy.py — port 5001)
         ▼                    ▼
   Supabase DB          External APIs
   (trades, recs,       · yfinance (OHLC)
-   positions,          · Groww API (live LTP)
+   positions,          · Dhan API (live LTP)
    events)             · NSE archives (universe)
 ```
 
@@ -63,7 +63,7 @@ Flask Backend (groww_proxy.py — port 5001)
 |---------|---------|
 | `flask` | REST API framework |
 | `flask-cors` | Cross-origin request headers for browser SPA |
-| `requests` | HTTP client for NSE API, Groww API, CSV fetches |
+| `requests` | HTTP client for NSE API, Dhan API, CSV fetches |
 | `yfinance` | Free stock OHLC data (Yahoo Finance) |
 | `pandas` | Time-series manipulation, EWM calculations, timestamps |
 | `numpy` | Vectorized math (max/min/mean, nan handling) |
@@ -81,7 +81,7 @@ Flask Backend (groww_proxy.py — port 5001)
 | Service | Used For |
 |---------|---------|
 | Yahoo Finance (yfinance) | 1-year daily OHLC for all screened stocks |
-| Groww API | Live intraday LTP, day_high, day_low |
+| Dhan API | Live intraday LTP, day_high, day_low |
 | NSE archives CSV | Stock universe (Nifty 50/100/200/500) |
 | NSE direct API | Fallback universe, market breadth, event calendar |
 | India VIX (`^INDIAVIX`) | Regime classification |
@@ -250,20 +250,21 @@ Method chaining builds URL params, then `.execute()` dispatches the HTTP call.
 
 **Connection verification:** On startup, a probe `GET /rest/v1/trades?select=id&limit=1` is issued. If it fails (missing env vars or network), `SB_OK = False` and all database routes return 503.
 
-#### Groww API Authentication
+#### Dhan API Authentication
 
-Groww uses a **SHA-256 checksum** authentication scheme:
+Dhan marketfeed uses static request headers:
 
 ```
-checksum = SHA256(api_secret + unix_timestamp)
-POST /v1/token/api/access  →  Bearer access_token (valid ~4 hours)
+client-id: <Dhan client ID>
+access-token: <Dhan access token>
+POST /v2/marketfeed/ohlc
 ```
 
-Three request body formats are attempted in sequence (the API is inconsistent across SDK versions). The token is cached globally for 4 hours with thread-safe access.
+Dhan quote APIs require exchange Security IDs, so the backend caches Dhan's NSE equity instrument master and resolves app symbols before calling marketfeed.
 
 **Credentials priority:**
-1. Session-level override (`POST /set-credentials`) — stored in `_session_api_key/secret`
-2. Environment variables `GROWW_API_KEY` / `GROWW_API_SECRET`
+1. Session-level override (`POST /set-credentials`) — stored in `_session_client_id/access_token`
+2. Environment variables `DHAN_CLIENT_ID` / `DHAN_ACCESS_TOKEN`
 
 ---
 
@@ -625,7 +626,7 @@ For trades not resolved by Pass 1 (e.g., today's hit not yet in historical data)
 
 ```
 Fetch _fetch_ltp_batch(remaining_symbols)
-    → Groww API: day_high, day_low (intraday extremes)
+    → Dhan API: LTP and day OHLC
     → fallback: yfinance
 
 For each unresolved trade:
@@ -654,9 +655,9 @@ _sb.table("trades").update({
 For each symbol, tries sources in order:
 
 ```
-1. Groww API  GET /v1/live-data/quote?exchange=NSE&segment=CASH&trading_symbol=SYM
-   → Returns: last_price, high_price, low_price, day_change, day_change_perc
-   → 429 response: circuit-breaks remaining symbols to yfinance
+1. Dhan API  POST /v2/marketfeed/ohlc with NSE_EQ Security IDs
+   → Returns: last_price and OHLC high/low/close
+   → Credentials or symbol-map failures fall back to yfinance
 
 2. yfinance fallback
    → 5-day daily history, last candle
@@ -675,14 +676,14 @@ prices[sym] = {ltp, day_high, day_low, change, change_pct, source}
 | GET | `/health` | Status check | `yf_available`, `supabase_ok`, `session_creds_active` |
 | GET | `/regime` | Current market regime | `regime`, `data.vix`, `data.ad_ratio`, `config` |
 | GET | `/ltp?symbols=A,B,C` | Batch live prices | `prices{sym: {ltp, day_high, day_low}}`, `failed[]` |
-| GET | `/quote/<symbol>` | Single stock quote | Groww payload or yfinance equivalent |
-| POST | `/refresh-token` | Force Groww token refresh | `ok` |
+| GET | `/quote/<symbol>` | Single stock quote | Dhan payload or yfinance equivalent |
+| POST | `/refresh-token` | Validate current Dhan credentials | `ok` |
 | GET | `/universe?index=NIFTY 500` | Stock list | `count`, `stocks[]`, `sectors[]` |
 | POST | `/screen` | Start async screening | `job_id`, `total`, `scope` |
 | GET | `/scan-progress/<job_id>` | Poll scan status | `status`, `progress`, `results[]`, `rejected[]`, `regime` |
 | POST | `/cancel-scan/<job_id>` | Stop running scan | `ok` |
 | GET | `/market-data` | Nifty/BankNifty/VIX + breadth + regime | `nifty50`, `banknifty`, `indiavix`, `breadth`, `regime` |
-| POST | `/set-credentials` | Set Groww API key/secret | `ok` |
+| POST | `/set-credentials` | Set Dhan client ID/access token | `ok` |
 | POST | `/save-trades` | Save BUY/STRONG BUY signals to Supabase | `saved`, `inserted`, `updated` |
 | GET | `/trades` | All trades + auto outcome reconciliation | `trades[]`, `outcome_reconciled` |
 | GET | `/portfolio-summary` | Holdings, PnL, sector allocation | `summary`, `holdings[]`, `allocation[]` |
@@ -780,8 +781,8 @@ All state is in-process (RAM). Restarts clear all caches.
 
 | Variable | TTL | Thread-safe | Purpose |
 |----------|-----|-------------|---------|
-| `_access_token` | 4 hours | `_cred_lock` | Groww bearer token |
-| `_session_api_key/secret` | Session | `_cred_lock` | User-provided override credentials |
+| `_session_client_id/access_token` | Session | `_cred_lock` | User-provided Dhan credentials |
+| `_dhan_symbol_map` | 24 hours | `_dhan_map_lock` | Dhan NSE symbol to Security ID map |
 | `_regime_cache` | 15 min | `_regime_lock` | Market regime + VIX + A/D ratio |
 | `_universe_cache` | 1 hour | `_universe_lock` | NSE stock list for a given scope |
 | `_jobs` | Until restart | `_jobs_lock` | All scan job state (progress, results) |
@@ -822,8 +823,8 @@ Layer 3 — Hardcoded Fallback (always works)
 |----------|-------------|
 | `SUPABASE_URL` | Supabase project URL (e.g. `https://xyz.supabase.co`) |
 | `SUPABASE_KEY` | Supabase `anon` or `service_role` key |
-| `GROWW_API_KEY` | Groww broker API key (optional — LTP falls back to yfinance) |
-| `GROWW_API_SECRET` | Groww broker API secret (optional) |
+| `DHAN_CLIENT_ID` | Dhan client ID (optional — LTP falls back to yfinance) |
+| `DHAN_ACCESS_TOKEN` | Dhan access token (optional) |
 
 ### Backend (Render / Heroku)
 
@@ -861,8 +862,8 @@ pip install flask flask-cors requests yfinance pandas numpy gunicorn
 
 export SUPABASE_URL="https://xyz.supabase.co"
 export SUPABASE_KEY="your-key"
-export GROWW_API_KEY="your-key"       # optional
-export GROWW_API_SECRET="your-secret" # optional
+export DHAN_CLIENT_ID="your-client-id"       # optional
+export DHAN_ACCESS_TOKEN="your-access-token" # optional
 
 python groww_proxy.py
 # → Listening on http://localhost:5001
