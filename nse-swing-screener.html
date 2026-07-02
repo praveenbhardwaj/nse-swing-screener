@@ -998,11 +998,11 @@ async function runScreen(){
     ema_filter:str("emaFilter","at_or_above"),
     macd_filter:str("macdFilter","bullish_neutral"),
     min_score:num("minScore",0),
-    rs_filter:true,high52_max_pct:25,higher_lows:true,
+    rs_filter:true,high52_max_pct:25,higher_lows:false,
     atr_min_pct:1.5,atr_max_pct:4.0,
-    sector_momentum:true,earnings_filter:true,
+    sector_momentum:false,earnings_filter:true,
     fii_dii_filter:false,delivery_min:0,
-    bb_filter:false,adx_min:20,no_gap_down:true,
+    bb_filter:false,adx_min:0,no_gap_down:false,
     breadth_filter:true,fetch_fundamentals:false,
   };
   try{

@@ -409,7 +409,7 @@ def get_regime_config(regime):
             "rsi_min": 45, "rsi_max": 68, "vol_min": 1.2,
             "rs_required": False, "higher_lows_req": False,
             "no_gap_req": False, "bb_filter_req": False, "atr_max_pct": 6.0, "min_score": 52,
-            "adx_min": 15, "sector_momentum_req": False,
+            "adx_min": 0, "sector_momentum_req": False,
             "max_rs_5d_diff": 8.0, "max_ema20_extension_pct": 6.0, "max_sl_pct": 5.0,
             "w_rsi": 20, "w_volume": 20, "w_ema": 15, "w_macd": 15,
             "w_rs": 12, "w_adx": 8, "w_delivery": 7, "w_pattern": 3,
