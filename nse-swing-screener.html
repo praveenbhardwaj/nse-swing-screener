@@ -536,10 +536,10 @@ details>summary::-webkit-details-marker{display:none}
 <div class="modal-overlay" id="credModal" style="display:none">
   <div class="modal-box">
     <div class="modal-ttl">Connect to Dhan</div>
-    <div class="modal-sub">Enter your Dhan client ID and access token to enable live screening.</div>
-    <label class="modal-lbl" for="credKey">Dhan Client ID</label>
+    <div class="modal-sub">Enter your Dhan API key/client ID and API secret/access token to enable live screening.</div>
+    <label class="modal-lbl" for="credKey">Dhan API Key / Client ID</label>
     <input class="modal-inp" type="text" id="credKey" placeholder="1000000001" autocomplete="off">
-    <label class="modal-lbl" for="credSecret">Dhan Access Token</label>
+    <label class="modal-lbl" for="credSecret">Dhan API Secret / Access Token</label>
     <input class="modal-inp" type="password" id="credSecret" placeholder="access-token" autocomplete="off">
     <div class="modal-err" id="credErr"></div>
     <button class="btn btn-p" id="credSubmitBtn" onclick="submitCredentials()" style="width:100%">Connect to Dhan</button>
@@ -1285,7 +1285,7 @@ async function submitCredentials(){
   if(!key||!secret){errEl.textContent="Both fields are required.";return;}
   btn.disabled=true;btn.textContent="Connecting...";errEl.textContent="";
   try{
-    const r=await fetch(`${PROXY}/set-credentials`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({client_id:key,access_token:secret})});
+    const r=await fetch(`${PROXY}/set-credentials`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({client_id:key,access_token:secret,api_key:key,api_secret:secret})});
     const d=await r.json();
     if(d.ok){sessionStorage.setItem("dhan_creds_set","1");hideCredentialModal();await checkProxy();fetchMarketData();loadUniverse();}
     else{

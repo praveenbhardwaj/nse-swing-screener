@@ -823,8 +823,8 @@ Layer 3 — Hardcoded Fallback (always works)
 |----------|-------------|
 | `SUPABASE_URL` | Supabase project URL (e.g. `https://xyz.supabase.co`) |
 | `SUPABASE_KEY` | Supabase `anon` or `service_role` key |
-| `DHAN_CLIENT_ID` | Dhan client ID (optional — LTP falls back to yfinance) |
-| `DHAN_ACCESS_TOKEN` | Dhan access token (optional) |
+| `DHAN_CLIENT_ID` / `DHAN_API_KEY` | Dhan client ID/API key (optional — LTP falls back to yfinance) |
+| `DHAN_ACCESS_TOKEN` / `DHAN_API_SECRET` | Dhan access token/API secret (optional) |
 
 ### Backend (Render / Heroku)
 
@@ -862,8 +862,8 @@ pip install flask flask-cors requests yfinance pandas numpy gunicorn
 
 export SUPABASE_URL="https://xyz.supabase.co"
 export SUPABASE_KEY="your-key"
-export DHAN_CLIENT_ID="your-client-id"       # optional
-export DHAN_ACCESS_TOKEN="your-access-token" # optional
+export DHAN_CLIENT_ID="your-client-id"       # optional; DHAN_API_KEY also works
+export DHAN_ACCESS_TOKEN="your-access-token" # optional; DHAN_API_SECRET also works
 
 python groww_proxy.py
 # → Listening on http://localhost:5001

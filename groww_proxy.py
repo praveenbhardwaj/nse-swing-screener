@@ -20,7 +20,7 @@ Run:  python groww_proxy.py
 Deps: pip install flask flask-cors requests yfinance pandas numpy
 """
 
-import csv, io, json, os, time, requests, threading, uuid
+import base64, csv, io, json, os, time, requests, threading, uuid
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -151,8 +151,16 @@ except Exception as _sb_err:
 # ══════════════════════════════════════════════════════════════════════
 # DHAN API AUTH + INSTRUMENT MAP
 # ══════════════════════════════════════════════════════════════════════
-DHAN_CLIENT_ID    = os.environ.get("DHAN_CLIENT_ID", "").strip()
-DHAN_ACCESS_TOKEN = os.environ.get("DHAN_ACCESS_TOKEN", "").strip()
+_ENV_DHAN_ACCESS_TOKEN = (
+    os.environ.get("DHAN_ACCESS_TOKEN", "").strip()
+    or os.environ.get("DHAN_API_SECRET", "").strip()
+)
+_ENV_DHAN_CLIENT_ID = (
+    os.environ.get("DHAN_CLIENT_ID", "").strip()
+    or os.environ.get("DHAN_API_KEY", "").strip()
+)
+DHAN_CLIENT_ID    = _ENV_DHAN_CLIENT_ID
+DHAN_ACCESS_TOKEN = _ENV_DHAN_ACCESS_TOKEN
 DHAN_BASE_URL     = "https://api.dhan.co/v2"
 DHAN_MASTER_URL   = "https://images.dhan.co/api-data/api-scrip-master-detailed.csv"
 
@@ -165,11 +173,26 @@ _cred_lock = threading.Lock()
 _dhan_symbol_map = None; _dhan_symbol_map_ts = 0
 _dhan_map_lock = threading.Lock()
 
+def _derive_dhan_client_id_from_token(access_token):
+    """Best-effort decode of Dhan JWT payload to extract dhanClientId."""
+    try:
+        parts = (access_token or "").split(".")
+        if len(parts) < 2:
+            return ""
+        payload = parts[1] + "=" * (-len(parts[1]) % 4)
+        data = json.loads(base64.urlsafe_b64decode(payload.encode()).decode())
+        return str(data.get("dhanClientId") or "").strip()
+    except Exception:
+        return ""
+
+
 def get_dhan_credentials():
     """Return active Dhan credentials from session override or environment."""
     with _cred_lock:
         client_id = _session_client_id or DHAN_CLIENT_ID
         access_token = _session_access_token or DHAN_ACCESS_TOKEN
+    if not client_id and access_token:
+        client_id = _derive_dhan_client_id_from_token(access_token)
     return client_id, access_token
 
 
@@ -236,6 +259,37 @@ def _load_dhan_symbol_map(force=False):
             _dhan_symbol_map = _dhan_symbol_map or {}
             _dhan_symbol_map_ts = time.time()
     return _dhan_symbol_map
+
+
+def _symbol_looks_tradeable(symbol):
+    """Keep only exchange-style tickers; skip company-name aliases from master CSV."""
+    if not symbol or len(symbol) > 20 or " " in symbol:
+        return False
+    return all(ch.isalnum() or ch in ("-", "&") for ch in symbol)
+
+
+def _build_dhan_universe(limit=None):
+    """Build NSE equity universe from Dhan instrument master."""
+    symbols = [s for s in _load_dhan_symbol_map().keys() if _symbol_looks_tradeable(s)]
+    stocks = [
+        {"symbol": sym, "name": sym, "sector": "Unknown", "industry": ""}
+        for sym in symbols[:limit]
+    ]
+    if stocks:
+        print(f"[Dhan-Universe] {len(stocks)} stocks from instrument master")
+    return stocks
+
+
+def _filter_stocks_to_dhan_master(stocks):
+    """Drop stale symbols from fallback universes when Dhan master is available."""
+    symbol_map = _load_dhan_symbol_map()
+    if not symbol_map:
+        return stocks
+    filtered = [s for s in stocks if (s.get("symbol") or "").upper() in symbol_map]
+    dropped = len(stocks) - len(filtered)
+    if dropped:
+        print(f"[Universe] Dropped {dropped} stale symbols not in Dhan master")
+    return filtered or stocks
 
 
 def _validate_dhan_credentials(client_id, access_token):
@@ -1280,6 +1334,12 @@ def fetch_universe(scope="NIFTY 500"):
         if len(merged) > 300:
             print(f"[Universe] Sectoral enrichment → {len(merged)} stocks")
 
+    if scope == "NSE TOP 1000" and len(merged) < 1000:
+        dhan_stocks = _build_dhan_universe(limit=1000)
+        if dhan_stocks:
+            print(f"[Universe] {scope}: using Dhan instrument master fallback")
+            return dhan_stocks
+
     # --- Layer 4: Hardcoded fallback ---
     if not merged:
         print(f"[Universe] All live sources failed for {scope}, using hardcoded fallback")
@@ -1287,6 +1347,10 @@ def fetch_universe(scope="NIFTY 500"):
             merged[stock["symbol"]] = stock
 
     result = list(merged.values())
+    if scope in ("NSE TOP 1000", "NIFTY 500", "ALL", "ALL NSE"):
+        result = _filter_stocks_to_dhan_master(result)
+    if scope == "NSE TOP 1000":
+        result = result[:1000]
     print(f"[Universe] {scope}: {len(result)} stocks total")
     return result
 
