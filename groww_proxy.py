@@ -397,6 +397,8 @@ def get_regime_config(regime):
             "rsi_min": 45, "rsi_max": 68, "vol_min": 1.2,
             "rs_required": False, "higher_lows_req": False,
             "no_gap_req": False, "bb_filter_req": False, "atr_max_pct": 7.0, "min_score": 50,
+            "adx_min": 0, "sector_momentum_req": False,
+            "max_rs_5d_diff": 10.0, "max_ema20_extension_pct": 7.0, "max_sl_pct": 5.5,
             "w_rsi": 20, "w_volume": 20, "w_ema": 15, "w_macd": 15,
             "w_rs": 10, "w_adx": 8, "w_delivery": 7, "w_pattern": 5,
             "strong_buy_score": 75, "buy_score": 50, "strong_buy_vol": 1.8,
@@ -407,6 +409,8 @@ def get_regime_config(regime):
             "rsi_min": 45, "rsi_max": 68, "vol_min": 1.2,
             "rs_required": False, "higher_lows_req": False,
             "no_gap_req": False, "bb_filter_req": False, "atr_max_pct": 6.0, "min_score": 52,
+            "adx_min": 15, "sector_momentum_req": False,
+            "max_rs_5d_diff": 8.0, "max_ema20_extension_pct": 6.0, "max_sl_pct": 5.0,
             "w_rsi": 20, "w_volume": 20, "w_ema": 15, "w_macd": 15,
             "w_rs": 12, "w_adx": 8, "w_delivery": 7, "w_pattern": 3,
             "strong_buy_score": 75, "buy_score": 52, "strong_buy_vol": 1.8,
@@ -415,18 +419,22 @@ def get_regime_config(regime):
         },
         REGIME_BEAR: {
             "rsi_min": 46, "rsi_max": 62, "vol_min": 1.2,
-            "rs_required": True, "higher_lows_req": False,
+            "rs_required": True, "higher_lows_req": True,
             "no_gap_req": True, "bb_filter_req": False, "atr_max_pct": 5.0, "min_score": 60,
+            "adx_min": 20, "sector_momentum_req": True,
+            "max_rs_5d_diff": 6.0, "max_ema20_extension_pct": 4.5, "max_sl_pct": 4.5,
             "w_rsi": 15, "w_volume": 25, "w_ema": 10, "w_macd": 12,
             "w_rs": 18, "w_adx": 10, "w_delivery": 7, "w_pattern": 3,
-            "strong_buy_score": 78, "buy_score": 62, "strong_buy_vol": 2.0,
-            "sl_atr_mult": 1.2, "t1_atr_mult": 2.0, "t2_atr_mult": 2.8,
+            "strong_buy_score": 999, "buy_score": 68, "strong_buy_vol": 2.0,
+            "sl_atr_mult": 1.2, "t1_atr_mult": 2.2, "t2_atr_mult": 2.8,
             "min_rr": 1.8, "allow_strong_buy": True,
         },
         REGIME_CRISIS: {
             "rsi_min": 48, "rsi_max": 60, "vol_min": 2.0,
             "rs_required": True, "higher_lows_req": True,
             "no_gap_req": True, "bb_filter_req": True, "atr_max_pct": 4.5, "min_score": 68,
+            "adx_min": 22, "sector_momentum_req": True,
+            "max_rs_5d_diff": 5.0, "max_ema20_extension_pct": 3.5, "max_sl_pct": 4.0,
             "w_rsi": 10, "w_volume": 25, "w_ema": 8, "w_macd": 8,
             "w_rs": 22, "w_adx": 12, "w_delivery": 8, "w_pattern": 7,
             "strong_buy_score": 999, "buy_score": 68, "strong_buy_vol": 2.5,
@@ -1596,6 +1604,9 @@ def analyze_stock(sym_info, df, params, context):
         rs_ok = rs_ok and (rs_sector_ok is not False)
 
     del_pct = context.get("delivery_cache", {}).get(sym)
+    breadth_ok = context.get("breadth", {}).get("breadth_ok", True)
+    weak_market = regime in (REGIME_BEAR, REGIME_CRISIS) or not breadth_ok
+    diff5 = ((s_ret_5d or 0) - (n_ret_5d or 0))
 
     # Step 7: Sector bonus
     sector_bonus = get_sector_bonus(sector)
@@ -1654,11 +1665,11 @@ def analyze_stock(sym_info, df, params, context):
         return rej(f"RS: 5d stock {s_ret_5d}% vs Nifty {n_ret_5d}%, 10d {s_ret_10d}% vs {n_ret_10d}% (underperforming)")
 
     # ── OTHER OPTIONAL GATES ──────────────────────────────────────
-    hl_required = rcfg["higher_lows_req"] or params.get("higher_lows", False)
+    hl_required = rcfg["higher_lows_req"] or params.get("higher_lows", False) or weak_market
     if hl_required and not higher_lows_ok:
         return rej(f"Higher lows required in {regime}")
 
-    ngd_required = rcfg["no_gap_req"] or params.get("no_gap_down", False)
+    ngd_required = rcfg["no_gap_req"] or params.get("no_gap_down", False) or weak_market
     if ngd_required and not no_gap_ok:
         return rej(f"Gap-down detected ({regime})")
 
@@ -1673,7 +1684,7 @@ def analyze_stock(sym_info, df, params, context):
     if atr_min_user > 0 and atr_pct is not None and atr_pct < atr_min_user:
         return rej(f"ATR% {atr_pct:.2f} < min {atr_min_user:.2f}")
 
-    adx_min_val = int(params.get("adx_min", 0) or 0)
+    adx_min_val = max(int(params.get("adx_min", 0) or 0), int(rcfg.get("adx_min", 0) or 0))
     if adx_min_val > 0 and (adx_val is None or adx_val < adx_min_val):
         return rej(f"ADX {adx_val} < {adx_min_val}")
 
@@ -1681,9 +1692,24 @@ def analyze_stock(sym_info, df, params, context):
     if h52_max > 0 and pct_below_52 > h52_max:
         return rej(f"{pct_below_52:.1f}% below 52wk high (limit {h52_max:.0f}%)")
 
-    if params.get("sector_momentum"):
-        if context.get("sector_ema", {}).get(sector) is False:
+    sector_required = params.get("sector_momentum") or rcfg.get("sector_momentum_req", False)
+    if sector_required:
+        sector_trend = context.get("sector_ema", {}).get(sector.upper(), context.get("sector_ema", {}).get(sector))
+        if sector_trend is False:
             return rej(f"Sector '{sector}' below EMA20")
+
+    max_rs_5d_diff = float(rcfg.get("max_rs_5d_diff", 0) or 0)
+    max_ema20_ext = float(rcfg.get("max_ema20_extension_pct", 0) or 0)
+    extended_rs = max_rs_5d_diff > 0 and diff5 > max_rs_5d_diff
+    extended_price = max_ema20_ext > 0 and diff_pct > max_ema20_ext
+    safer_extended_entry = higher_lows_ok or consol_break or ma_detail.get("b") or diff_pct <= 1.0
+    if (extended_rs or extended_price) and not safer_extended_entry:
+        ext_bits = []
+        if extended_rs:
+            ext_bits.append(f"RS +{diff5:.1f}% > {max_rs_5d_diff:.1f}%")
+        if extended_price:
+            ext_bits.append(f"price {diff_pct:.1f}% above EMA20 > {max_ema20_ext:.1f}%")
+        return rej("Extended entry without pullback/consolidation: " + ", ".join(ext_bits))
 
     if params.get("earnings_filter") and sym in context.get("earnings_syms", set()):
         return rej("Earnings due in 5 days")
@@ -1707,13 +1733,20 @@ def analyze_stock(sym_info, df, params, context):
     #   = Sector (10) = Fundamentals (10) > 52-week range (5)
     score = 0
 
-    # RS vs Nifty 5-day: max 25 pts (most important factor)
-    # Scale: +5% outperformance = 25pts, +2% = 15pts, +1% = 10pts, ≥0% = 5pts
-    diff5 = ((s_ret_5d or 0) - (n_ret_5d or 0))
-    if diff5 >= 5:    score += 25
-    elif diff5 >= 2:  score += 15
-    elif diff5 >= 1:  score += 10
-    elif diff5 >= 0:  score += 5
+    # RS vs Nifty: strong RS helps, but very extended 5d RS is capped so the
+    # score does not chase after a move that is already stretched.
+    if diff5 >= max_rs_5d_diff > 0:
+        score += 14
+    elif diff5 >= 5:
+        score += 20
+    elif diff5 >= 2:
+        score += 15
+    elif diff5 >= 1:
+        score += 10
+    elif diff5 >= 0:
+        score += 5
+    if rs_10d_ok:
+        score += 3
 
     # RSI sweet spot: max 15 pts (55–65 is the ideal momentum zone)
     if 55 <= rsi_val <= 65:    score += 15
@@ -1759,7 +1792,17 @@ def analyze_stock(sym_info, df, params, context):
     elif 30 <= pctile_52wk < 40 or 80 < pctile_52wk <= 90: score += 3
     else:                              score += 1
 
+    if max_ema20_ext > 0 and diff_pct > max_ema20_ext:
+        score -= 8
+    if not higher_lows_ok:
+        score -= 5
+    if sector_required and context.get("sector_ema", {}).get(sector.upper(), context.get("sector_ema", {}).get(sector)) is False:
+        score -= 5
+    if adx_min_val > 0 and adx_val is not None and adx_val < adx_min_val + 5:
+        score -= 3
+
     score = min(score, 100)  # hard cap at 100
+    score = max(score, 0)
 
     min_score = int(params.get("min_score", 0) or 0)
     if score < min_score:
@@ -1770,8 +1813,6 @@ def analyze_stock(sym_info, df, params, context):
     # BUY: score + MACD + price vs EMA20; any Step-4 MA path (ma_ok) is enough — not
     #       only "EMA20 > EMA50" (cond_a), or many valid setups stay stuck as WATCH.
     # CRISIS regime disables STRONG BUY entirely (strong_buy_score=999).
-    breadth_ok = context.get("breadth", {}).get("breadth_ok", True)
-
     ema_stack_strict = ma_detail.get("a", False)  # price > EMA20 > EMA50
     quality_buy_score = max(75, rcfg["buy_score"])
 
@@ -1840,23 +1881,56 @@ def analyze_stock(sym_info, df, params, context):
         buy_high  = round(price * 1.01, 2)
         entry     = (buy_low + buy_high) / 2  # midpoint entry for calculations
 
-        # Target: entry×1.05 (5% gain in 1 week per requirement)
-        t1_price  = round(entry * 1.05, 2)
-        # Cap at 50EMA or 200EMA if they're closer (resistance)
+        atr_for_risk = atr_val if atr_val and atr_val > 0 else entry * 0.02
+        sl_atr_mult = float(rcfg.get("sl_atr_mult", 1.5) or 1.5)
+        t1_atr_mult = float(rcfg.get("t1_atr_mult", 2.5) or 2.5)
+        t2_atr_mult = float(rcfg.get("t2_atr_mult", 3.0) or 3.0)
+        min_rr = float(rcfg.get("min_rr", 1.5) or 1.5)
+        max_sl_pct = float(rcfg.get("max_sl_pct", 5.0) or 5.0)
+
+        # Stop uses the wider of ATR and nearby structural support, capped by
+        # max_sl_pct so a noisy stock cannot create unbounded downside.
+        recent_support = float(np.min(lows[-10:])) if len(lows) >= 10 else float(np.min(lows))
+        support_candidates = [p for p in [ema20 * 0.995, recent_support * 0.995] if p < entry]
+        structural_sl = max(support_candidates) if support_candidates else entry - atr_for_risk * sl_atr_mult
+        atr_sl = entry - (atr_for_risk * sl_atr_mult)
+        bounded_sl = entry * (1 - max_sl_pct / 100)
+        sl_price = round(max(min(atr_sl, structural_sl), bounded_sl), 2)
+        if sl_price >= entry:
+            sl_price = round(entry * (1 - min(max_sl_pct, 1.0) / 100), 2)
+
+        risk_per_share = entry - sl_price
+        if risk_per_share <= 0:
+            result["sig"] = "WATCH"
+            result["target_reject_reason"] = "Invalid ATR stop-loss distance"
+            result["reason"] = f"{result['reason']} | Target rejected: invalid ATR stop-loss distance"
+            return result
+
+        # Target is ATR-based and only capped at resistance when R:R survives.
+        t1_price = round(entry + (atr_for_risk * t1_atr_mult), 2)
         resistances = [r for r in [ema50, ema200] if r > price * 1.01]
         if resistances:
             nearest_res = min(resistances)
             if nearest_res < t1_price:
-                t1_price = round(nearest_res * 0.998, 2)
+                capped_t1 = round(nearest_res * 0.998, 2)
+                capped_rr = (capped_t1 - entry) / risk_per_share if risk_per_share > 0 else 0
+                if capped_rr < min_rr:
+                    result["sig"] = "WATCH"
+                    result["target_reject_reason"] = f"Nearest resistance caps R:R at {capped_rr:.2f} < {min_rr:.2f}"
+                    result["reason"] = f"{result['reason']} | Target rejected: nearest resistance caps R:R at {capped_rr:.2f}"
+                    return result
+                t1_price = capped_t1
 
-        # SL: entry×0.965 (3.5% below), floored at 20EMA−0.5%
-        sl_price  = round(max(entry * 0.965, ema20 * 0.995), 2)
         sl_pct    = round((entry - sl_price) / entry * 100, 2)
         t1_pct    = round((t1_price - entry) / entry * 100, 2)
         actual_rr = round(t1_pct / sl_pct, 2) if sl_pct > 0 else 0
+        if actual_rr < min_rr:
+            result["sig"] = "WATCH"
+            result["target_reject_reason"] = f"R:R {actual_rr:.2f} < min {min_rr:.2f}"
+            result["reason"] = f"{result['reason']} | Target rejected: R:R {actual_rr:.2f} < min {min_rr:.2f}"
+            return result
 
-        # T2 as 6.5% above entry (stretch target)
-        t2_price  = round(entry * 1.065, 2)
+        t2_price  = round(entry + (atr_for_risk * t2_atr_mult), 2)
 
         shares   = int(20000 // price)
         result.update({
@@ -1907,7 +1981,8 @@ def scan_worker(job_id, stocks, params):
 
     nifty_closes   = _prefetch_nifty_closes()
     unique_sectors = list({s.get("sector", "").upper() for s in stocks})
-    sector_ema     = _prefetch_sector_ema(unique_sectors) if params.get("sector_momentum") else {}
+    sector_ema_required = params.get("sector_momentum") or rcfg.get("sector_momentum_req", False)
+    sector_ema     = _prefetch_sector_ema(unique_sectors) if sector_ema_required else {}
     sector_closes  = _prefetch_sector_closes()
     job["status_msg"] = "Sector data ready"
 
